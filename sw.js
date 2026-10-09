@@ -1,5 +1,5 @@
 /* Increment VERSION whenever app shell files change. Documents live in IndexedDB. */
-const VERSION = 'v3.2-paper-edges';
+const VERSION = 'v3.3-material-boundaries';
 const SHELL_CACHE = 'gomaa-scan-shell-' + VERSION;
 const LIBRARY_CACHE = 'gomaa-scan-libraries-' + VERSION;
 const BASE = self.registration.scope;
