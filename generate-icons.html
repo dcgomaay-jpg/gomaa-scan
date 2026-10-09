@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gomaa Scan — توليد الأيقونات</title>
+<style>body{font:18px/1.8 system-ui;background:#f4f7fc;color:#15253f;max-width:640px;margin:50px auto;padding:24px}button,a{display:inline-block;background:#2563eb;color:white;border:0;border-radius:12px;padding:12px 20px;margin:8px;font:inherit;text-decoration:none}canvas{display:block;width:192px;height:192px;border-radius:42px;margin:20px auto}h1{font-size:26px}</style>
+<h1>أيقونات Gomaa Scan</h1>
+<p>اضغط لتوليد أيقونات 192 و512 و180 بكسل. احفظ الصور داخل مجلد icons بنفس الأسماء الظاهرة.</p>
+<button id="generate">توليد الأيقونات</button>
+<canvas id="preview" width="512" height="512"></canvas>
+<div id="downloads"></div>
+<script>
+const shape = new Path2D('M335 192c-17-20-41-30-70-30-54 0-91 39-91 94s37 94 91 94c31 0 56-10 75-29v-73h-79v38h36v20c-9 5-20 7-32 7-32 0-53-23-53-57s21-57 53-57c18 0 31 6 44 18z');
+function draw(canvas,size){canvas.width=canvas.height=size;const ctx=canvas.getContext('2d');ctx.fillStyle='#2563eb';ctx.fillRect(0,0,size,size);ctx.scale(size/512,size/512);ctx.fillStyle='white';ctx.fill(shape);}
+draw(document.getElementById('preview'),512);
+document.getElementById('generate').onclick=()=>{
+  const downloads=document.getElementById('downloads');downloads.replaceChildren();
+  for(const [size,name] of [[192,'icon-192.png'],[512,'icon-512.png'],[180,'apple-touch-icon.png']]){
+    const canvas=document.createElement('canvas');draw(canvas,size);const link=document.createElement('a');link.download=name;link.href=canvas.toDataURL('image/png');link.textContent=name;downloads.append(link);
+  }
+};
+</script>
+</html>

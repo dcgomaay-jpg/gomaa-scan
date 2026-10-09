@@ -1,0 +1,478 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#2563eb" id="themeColor">
+  <meta name="color-scheme" content="light dark">
+  <meta name="description" content="Gomaa Scan — مسح المستندات وحفظها على جهازك.">
+  <meta name="application-name" content="Gomaa Scan">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Gomaa Scan">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <title>Gomaa Scan</title>
+  <link rel="manifest" href="./manifest.json">
+  <link rel="icon" type="image/svg+xml" href="./icons/logo.svg">
+  <link rel="icon" type="image/png" sizes="192x192" href="./icons/icon-192.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="./icons/apple-touch-icon.png">
+  <link rel="stylesheet" href="./style.css">
+  <!-- app.js loads the pinned CDN libraries and registers sw.js. -->
+  <script defer src="./app.js"></script>
+</head>
+<body>
+  <a class="skip-link" href="#mainContent" data-i18n="skipToContent">انتقل للمحتوى</a>
+  <noscript>فعّل JavaScript في المتصفح لتشغيل Gomaa Scan.</noscript>
+
+  <svg class="icon-sprite" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <defs>
+      <symbol id="i-library" viewBox="0 0 24 24"><path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z"/></symbol>
+      <symbol id="i-camera" viewBox="0 0 24 24"><path d="M8 5l2-2h4l2 2h4a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z"/><circle cx="12" cy="12" r="4"/></symbol>
+      <symbol id="i-settings" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/><circle cx="8" cy="6" r="2"/><circle cx="16" cy="12" r="2"/><circle cx="10" cy="18" r="2"/></symbol>
+      <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+      <symbol id="i-theme" viewBox="0 0 24 24"><path d="M20.5 14A9 9 0 0 1 10 3.5 9 9 0 1 0 20.5 14z"/></symbol>
+      <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 16V3M7 8l5-5 5 5M4 15v6h16v-6"/></symbol>
+      <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M16 16l5 5"/></symbol>
+      <symbol id="i-list" viewBox="0 0 24 24"><path d="M9 5h12M9 12h12M9 19h12M3 5h1M3 12h1M3 19h1"/></symbol>
+      <symbol id="i-flash" viewBox="0 0 24 24"><path d="M13 2L4 14h7l-1 8 10-13h-7z"/></symbol>
+      <symbol id="i-document" viewBox="0 0 24 24"><path d="M14 2H5v20h14V7zM14 2v5h5M8 12h8M8 16h8"/></symbol>
+      <symbol id="i-rotate" viewBox="0 0 24 24"><path d="M4 10a8 8 0 1 1 2 8M4 4v6h6"/></symbol>
+      <symbol id="i-grip" viewBox="0 0 24 24"><path d="M9 5h.01M15 5h.01M9 12h.01M15 12h.01M9 19h.01M15 19h.01"/></symbol>
+    </defs>
+  </svg>
+
+  <div class="app-shell">
+    <header class="app-header">
+      <a class="brand" href="#library" aria-label="Gomaa Scan">
+        <span class="brand-logo" aria-hidden="true">G</span>
+        <span class="brand-name" dir="ltr">Gomaa <strong>Scan</strong></span>
+      </a>
+      <div class="header-actions">
+        <span id="offlineBadge" class="badge" role="status" hidden data-i18n="offline">دون إنترنت</span>
+        <button id="themeToggle" class="icon-button" type="button" aria-label="تبديل المظهر" data-i18n-aria="toggleTheme">
+          <svg class="icon" aria-hidden="true"><use href="#i-theme"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <aside id="installBanner" class="notice" hidden aria-labelledby="installTitle">
+      <div>
+        <strong id="installTitle" data-i18n="installTitle">Gomaa Scan على شاشة موبايلك</strong>
+        <p data-i18n="installDescription">ثبّت التطبيق لفتحه مباشرة من الشاشة الرئيسية.</p>
+      </div>
+      <button id="installButton" type="button" class="button primary" data-i18n="install">تثبيت</button>
+      <button id="dismissInstall" type="button" class="button ghost" data-i18n="later">لاحقًا</button>
+    </aside>
+
+    <main id="mainContent" tabindex="-1">
+      <!-- Library -->
+      <section id="libraryView" class="view" aria-labelledby="libraryTitle">
+        <div class="section-heading">
+          <div>
+            <h1 id="libraryTitle" data-i18n="library">المكتبة</h1>
+            <p id="librarySummary" class="muted" role="status"></p>
+          </div>
+          <button id="selectModeButton" type="button" class="button secondary" aria-pressed="false" data-i18n="select">تحديد</button>
+        </div>
+        <div class="library-tools">
+          <label class="search-field">
+            <svg class="icon" aria-hidden="true"><use href="#i-search"/></svg>
+            <span class="sr-only" data-i18n="searchDocuments">البحث في المستندات</span>
+            <input id="searchInput" type="search" placeholder="ابحث باسم المستند" data-i18n-placeholder="searchPlaceholder" autocomplete="off">
+          </label>
+          <label class="sort-field">
+            <span class="sr-only" data-i18n="sort">الترتيب</span>
+            <select id="sortSelect">
+              <option value="newest" data-i18n="newest">الأحدث أولًا</option>
+              <option value="oldest" data-i18n="oldest">الأقدم أولًا</option>
+              <option value="name" data-i18n="byName">حسب الاسم</option>
+            </select>
+          </label>
+          <div class="segmented-control" role="group" aria-label="طريقة العرض" data-i18n-aria="viewMode">
+            <button id="gridViewButton" class="icon-button active" type="button" aria-pressed="true" aria-label="عرض شبكة" data-i18n-aria="gridView">
+              <svg class="icon" aria-hidden="true"><use href="#i-library"/></svg>
+            </button>
+            <button id="listViewButton" class="icon-button" type="button" aria-pressed="false" aria-label="عرض قائمة" data-i18n-aria="listView">
+              <svg class="icon" aria-hidden="true"><use href="#i-list"/></svg>
+            </button>
+          </div>
+        </div>
+        <div id="selectionToolbar" class="selection-toolbar" hidden>
+          <strong id="selectionCount" role="status"></strong>
+          <button id="selectAllButton" type="button" class="button ghost" data-i18n="selectAll">تحديد الكل</button>
+          <button id="shareSelectedButton" type="button" class="button secondary" disabled data-i18n="share">مشاركة</button>
+          <button id="deleteSelectedButton" type="button" class="button danger" disabled data-i18n="delete">حذف</button>
+          <button id="cancelSelectionButton" type="button" class="button ghost" data-i18n="cancel">إلغاء</button>
+        </div>
+        <p id="storageError" class="notice error" role="alert" hidden></p>
+        <div id="documentGrid" class="document-grid" aria-label="المستندات" data-i18n-aria="documents" aria-busy="false"></div>
+        <div id="emptyLibrary" class="empty-state" hidden>
+          <span class="empty-icon"><svg class="icon" aria-hidden="true"><use href="#i-document"/></svg></span>
+          <h2 data-i18n="emptyTitle">أول مستند يبدأ من هنا</h2>
+          <p data-i18n="emptyDescription">صوّر مستندًا أو اختر صورًا من المعرض.</p>
+          <button type="button" class="button primary" data-action="new-scan" data-i18n="newScan">مسح جديد</button>
+          <button type="button" class="button secondary" data-action="import-images" data-i18n="importGallery">من المعرض</button>
+        </div>
+        <p id="noSearchResults" class="empty-state" hidden data-i18n="noResults">لا توجد مستندات بهذا الاسم.</p>
+      </section>
+
+      <!-- Camera -->
+      <section id="scanView" class="view" hidden aria-labelledby="scanTitle">
+        <div class="section-heading">
+          <h1 id="scanTitle" data-i18n="scan">مسح مستند</h1>
+          <button id="closeScanButton" type="button" class="button ghost" data-i18n="close">إغلاق</button>
+        </div>
+        <div id="cameraStage" class="camera-stage">
+          <video id="cameraVideo" autoplay playsinline muted aria-label="معاينة الكاميرا" data-i18n-aria="cameraPreview"></video>
+          <canvas id="cameraOverlay" class="camera-overlay" aria-hidden="true"></canvas>
+          <div class="camera-guide" aria-hidden="true"></div>
+          <p id="cameraStatus" class="camera-status" role="status" data-i18n="cameraStarting">جارٍ تشغيل الكاميرا…</p>
+        </div>
+        <p id="cameraError" class="notice error" role="alert" hidden></p>
+        <div class="scan-options">
+          <label class="switch-row" for="autoCaptureToggle">
+            <span data-i18n="autoCapture">التقاط تلقائي عند ثبات الحواف</span>
+            <input id="autoCaptureToggle" type="checkbox" role="switch">
+          </label>
+          <button id="torchButton" type="button" class="button secondary" hidden aria-pressed="false">
+            <svg class="icon" aria-hidden="true"><use href="#i-flash"/></svg>
+            <span data-i18n="flash">الفلاش</span>
+          </button>
+        </div>
+        <div class="capture-controls">
+          <button type="button" class="button secondary" data-action="import-images">
+            <svg class="icon" aria-hidden="true"><use href="#i-upload"/></svg>
+            <span data-i18n="gallery">المعرض</span>
+          </button>
+          <button id="captureButton" type="button" class="shutter-button" disabled aria-label="التقاط صورة" data-i18n-aria="capture">
+            <span aria-hidden="true"></span>
+          </button>
+          <button id="retryCameraButton" type="button" class="button ghost" hidden data-i18n="retryCamera">إعادة المحاولة</button>
+        </div>
+        <p class="helper-text" data-i18n="cameraHint">ضع الورقة على خلفية مختلفة اللون، مع إضاءة جيدة.</p>
+      </section>
+
+      <!-- Corner adjustment -->
+      <section id="cropView" class="view" hidden aria-labelledby="cropTitle">
+        <div class="section-heading">
+          <h1 id="cropTitle" data-i18n="adjustEdges">تعديل الحواف</h1>
+          <button id="cancelCropButton" type="button" class="button ghost" data-i18n="cancel">إلغاء</button>
+        </div>
+        <p id="cropMessage" class="notice" role="status"></p>
+        <p id="cropInstructions" class="helper-text" data-i18n="cropHint">اسحب الزوايا الأربع. يمكنك أيضًا تحديد الزاوية وتحريكها بمفاتيح الأسهم.</p>
+        <div id="cropStage" class="crop-stage">
+          <canvas id="cropCanvas" aria-label="الصورة الأصلية" data-i18n-aria="originalImage"></canvas>
+          <svg id="cropOverlay" class="crop-overlay" viewBox="0 0 1000 1000" preserveAspectRatio="none" aria-hidden="true">
+            <path id="cropShade" class="crop-shade" fill-rule="evenodd" d="M0 0H1000V1000H0Z M100 100V900H900V100Z"/>
+            <polygon id="cropPolygon" points="100,100 900,100 900,900 100,900"/>
+          </svg>
+          <button type="button" class="crop-handle" data-corner="0" aria-label="الزاوية العلوية اليسرى" data-i18n-aria="cornerTopLeft" aria-describedby="cropInstructions"></button>
+          <button type="button" class="crop-handle" data-corner="1" aria-label="الزاوية العلوية اليمنى" data-i18n-aria="cornerTopRight" aria-describedby="cropInstructions"></button>
+          <button type="button" class="crop-handle" data-corner="2" aria-label="الزاوية السفلية اليمنى" data-i18n-aria="cornerBottomRight" aria-describedby="cropInstructions"></button>
+          <button type="button" class="crop-handle" data-corner="3" aria-label="الزاوية السفلية اليسرى" data-i18n-aria="cornerBottomLeft" aria-describedby="cropInstructions"></button>
+          <canvas id="magnifierCanvas" class="magnifier" width="160" height="160" hidden aria-hidden="true"></canvas>
+        </div>
+        <div class="action-bar">
+          <button id="fullImageButton" type="button" class="button secondary" data-i18n="useFullImage">تحديد الصورة كاملة</button>
+          <button id="confirmCropButton" type="button" class="button primary" data-i18n="confirmCrop">قص وتصحيح المنظور</button>
+        </div>
+      </section>
+
+      <!-- Filters -->
+      <section id="editView" class="view" hidden aria-labelledby="editTitle">
+        <div class="section-heading">
+          <h1 id="editTitle" data-i18n="enhanceImage">توضيح الصورة</h1>
+          <button id="backToCropButton" type="button" class="button ghost" data-i18n="adjustEdges">تعديل الحواف</button>
+        </div>
+        <div class="editor-stage">
+          <canvas id="editCanvas" aria-label="معاينة الصورة المعدلة" data-i18n-aria="editedPreview"></canvas>
+        </div>
+        <div id="filterStrip" class="filter-strip" role="group" aria-label="فلاتر الصورة" data-i18n-aria="imageFilters">
+          <button type="button" class="filter-button active" data-filter="original" aria-pressed="true">
+            <canvas width="96" height="128" aria-hidden="true"></canvas><span data-i18n="filterOriginal">Original</span>
+          </button>
+          <button type="button" class="filter-button" data-filter="magic" aria-pressed="false">
+            <canvas width="96" height="128" aria-hidden="true"></canvas><span data-i18n="filterMagic">Magic Color</span>
+          </button>
+          <button type="button" class="filter-button" data-filter="bw" aria-pressed="false">
+            <canvas width="96" height="128" aria-hidden="true"></canvas><span data-i18n="filterBW">Black &amp; White</span>
+          </button>
+          <button type="button" class="filter-button" data-filter="gray" aria-pressed="false">
+            <canvas width="96" height="128" aria-hidden="true"></canvas><span data-i18n="filterGray">Grayscale</span>
+          </button>
+          <button type="button" class="filter-button" data-filter="lighten" aria-pressed="false">
+            <canvas width="96" height="128" aria-hidden="true"></canvas><span data-i18n="filterLighten">Lighten</span>
+          </button>
+          <button type="button" class="filter-button" data-filter="shadows" aria-pressed="false">
+            <canvas width="96" height="128" aria-hidden="true"></canvas><span data-i18n="filterShadows">Remove Shadows</span>
+          </button>
+        </div>
+        <div class="adjustment-panel">
+          <label class="range-field" for="brightnessRange">
+            <span data-i18n="brightness">السطوع</span>
+            <output id="brightnessValue" for="brightnessRange">0</output>
+            <input id="brightnessRange" type="range" min="-60" max="60" step="1" value="0">
+          </label>
+          <label class="range-field" for="contrastRange">
+            <span data-i18n="contrast">التباين</span>
+            <output id="contrastValue" for="contrastRange">0</output>
+            <input id="contrastRange" type="range" min="-60" max="60" step="1" value="0">
+          </label>
+        </div>
+        <div class="action-bar">
+          <button id="rotateButton" type="button" class="button secondary">
+            <svg class="icon" aria-hidden="true"><use href="#i-rotate"/></svg>
+            <span data-i18n="rotate90">تدوير 90°</span>
+          </button>
+          <button id="resetAdjustmentsButton" type="button" class="button ghost" data-i18n="reset">إعادة ضبط</button>
+          <button id="acceptPageButton" type="button" class="button primary" data-i18n="keepPage">اعتماد الصفحة</button>
+        </div>
+      </section>
+
+      <!-- Draft and saved document -->
+      <section id="documentView" class="view" hidden aria-labelledby="documentTitle">
+        <div class="section-heading">
+          <div>
+            <h1 id="documentTitle" dir="auto"></h1>
+            <p id="documentMeta" class="muted" role="status"></p>
+          </div>
+          <button id="closeDocumentButton" type="button" class="button ghost" data-i18n="backLibrary">المكتبة</button>
+        </div>
+        <p id="documentNotice" class="notice" role="status" hidden></p>
+        <div class="document-actions">
+          <button id="addPageButton" type="button" class="button secondary" data-i18n="addPages">إضافة صفحات</button>
+          <button id="saveDraftButton" type="button" class="button primary" data-i18n="saveDocument">حفظ المستند</button>
+          <button id="savePageChangesButton" type="button" class="button primary" hidden data-i18n="saveChanges">حفظ التغييرات</button>
+          <button id="shareDocumentButton" type="button" class="button secondary" hidden data-i18n="share">مشاركة</button>
+          <button id="downloadDocumentButton" type="button" class="button secondary" hidden data-i18n="download">تحميل</button>
+          <button id="renameDocumentButton" type="button" class="button ghost" hidden data-i18n="rename">إعادة تسمية</button>
+          <button id="ocrDocumentButton" type="button" class="button secondary" hidden data-i18n="extractText">استخراج النص</button>
+          <button id="deleteDocumentButton" type="button" class="button danger" hidden data-i18n="delete">حذف</button>
+        </div>
+        <p id="reorderHint" class="helper-text" data-i18n="reorderHint">اسحب مقبض الصفحة لترتيبها، أو استخدم زري تقديم وتأخير.</p>
+        <ol id="pageList" class="page-grid" aria-describedby="reorderHint"></ol>
+      </section>
+
+      <!-- Settings -->
+      <section id="settingsView" class="view" hidden aria-labelledby="settingsTitle">
+        <div class="section-heading"><h1 id="settingsTitle" data-i18n="settings">الإعدادات</h1></div>
+        <div class="settings-card">
+          <label class="setting-row" for="languageSelect">
+            <span data-i18n="language">اللغة</span>
+            <select id="languageSelect"><option value="ar">العربية</option><option value="en">English</option></select>
+          </label>
+          <label class="setting-row" for="themeSelect">
+            <span data-i18n="appearance">المظهر</span>
+            <select id="themeSelect">
+              <option value="system" data-i18n="followSystem">حسب النظام</option>
+              <option value="light" data-i18n="lightMode">فاتح</option>
+              <option value="dark" data-i18n="darkMode">داكن</option>
+            </select>
+          </label>
+        </div>
+        <div class="settings-card">
+          <h2 data-i18n="localStorage">التخزين على الجهاز</h2>
+          <p id="storageUsage" class="muted" role="status"></p>
+          <p id="persistenceStatus" role="status"></p>
+          <button id="persistStorageButton" type="button" class="button secondary" data-i18n="requestPersistence">طلب تخزين دائم</button>
+          <p class="helper-text" data-i18n="storageHint">قرار التخزين الدائم يرجع للمتصفح. احتفظ بنسخة محمّلة من المستندات المهمة.</p>
+        </div>
+        <div class="settings-card">
+          <h2 data-i18n="offlinePreparation">التجهيز للعمل دون إنترنت</h2>
+          <p data-i18n="offlineHint">نزّل مكتبات المسح وPDF وبيانات التعرف على النص بالعربي والإنجليزي وأنت متصل بالإنترنت.</p>
+          <p id="offlineReadyStatus" role="status" data-i18n="offlineNotReady">لم يكتمل التنزيل بعد.</p>
+          <progress id="offlineProgress" max="1" value="0" hidden aria-label="تقدم تنزيل ملفات الأوفلاين" data-i18n-aria="offlineProgress"></progress>
+          <button id="prepareOfflineButton" type="button" class="button primary" data-i18n="prepareOffline">تنزيل ملفات الأوفلاين</button>
+        </div>
+        <div class="settings-card">
+          <h2 data-i18n="installApplication">تثبيت التطبيق</h2>
+          <button id="settingsInstallButton" type="button" class="button secondary" hidden data-i18n="install">تثبيت</button>
+          <p id="installHelp" class="helper-text" data-i18n="installHelp">أندرويد: قائمة المتصفح ثم تثبيت التطبيق. آيفون: افتحه في Safari ثم مشاركة ثم إضافة إلى الشاشة الرئيسية.</p>
+        </div>
+        <p class="privacy-note" data-i18n="privacyNote">صورك ومستنداتك تُعالج وتُحفظ على هذا الجهاز. لا تُرفع إلى خادم.</p>
+      </section>
+    </main>
+
+    <button id="newScanFab" type="button" class="fab" data-action="new-scan" aria-label="مسح جديد" data-i18n-aria="newScan">
+      <svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg>
+    </button>
+    <nav class="bottom-nav" aria-label="التنقل الرئيسي" data-i18n-aria="mainNavigation">
+      <button type="button" class="nav-button active" data-nav="library" aria-current="page">
+        <svg class="icon" aria-hidden="true"><use href="#i-library"/></svg><span data-i18n="library">المكتبة</span>
+      </button>
+      <button type="button" class="nav-button" data-nav="scan">
+        <svg class="icon" aria-hidden="true"><use href="#i-camera"/></svg><span data-i18n="scanTab">مسح</span>
+      </button>
+      <button type="button" class="nav-button" data-nav="settings">
+        <svg class="icon" aria-hidden="true"><use href="#i-settings"/></svg><span data-i18n="settings">الإعدادات</span>
+      </button>
+    </nav>
+  </div>
+
+  <input id="imageInput" type="file" accept="image/*" multiple hidden>
+  <canvas id="detectionCanvas" hidden aria-hidden="true"></canvas>
+
+  <!-- Save -->
+  <dialog id="saveDialog" class="modal" aria-labelledby="saveTitle">
+    <form id="saveForm" class="modal-body">
+      <h2 id="saveTitle" data-i18n="saveDocument">حفظ المستند</h2>
+      <label class="form-field" for="fileNameInput">
+        <span data-i18n="fileName">اسم الملف</span>
+        <input id="fileNameInput" name="fileName" type="text" required maxlength="120" autocomplete="off" dir="auto" enterkeyhint="done" aria-describedby="fileNameHint">
+      </label>
+      <p id="fileNameHint" class="helper-text" data-i18n="uniqueNameHint">سيُضاف رقم تلقائيًا إذا كان الاسم مستخدمًا.</p>
+      <fieldset class="format-options">
+        <legend data-i18n="format">الصيغة</legend>
+        <label><input type="radio" name="outputFormat" value="pdf" checked><span>PDF</span></label>
+        <label><input type="radio" name="outputFormat" value="jpg"><span>JPG</span></label>
+      </fieldset>
+      <p id="jpgHint" class="helper-text" hidden data-i18n="jpgHint">لو المستند أكثر من صفحة، سيتم تحميل ومشاركة كل صفحة كصورة مستقلة.</p>
+      <label class="form-field" for="qualitySelect">
+        <span data-i18n="compressionQuality">جودة الضغط</span>
+        <select id="qualitySelect" name="quality">
+          <option value="high" data-i18n="qualityHigh">عالية — أوضح وحجم أكبر</option>
+          <option value="medium" selected data-i18n="qualityMedium">متوسطة — حجم متوازن</option>
+          <option value="small" data-i18n="qualitySmall">صغيرة — أقل حجم</option>
+        </select>
+      </label>
+      <p id="saveError" class="field-error" role="alert" hidden></p>
+      <div class="modal-actions">
+        <button type="button" class="button ghost" data-close-dialog="saveDialog" data-i18n="cancel">إلغاء</button>
+        <button id="saveSubmitButton" type="submit" class="button primary" data-i18n="save">حفظ</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Rename -->
+  <dialog id="renameDialog" class="modal" aria-labelledby="renameTitle">
+    <form id="renameForm" class="modal-body">
+      <h2 id="renameTitle" data-i18n="rename">إعادة تسمية</h2>
+      <label class="form-field" for="renameInput">
+        <span data-i18n="fileName">اسم الملف</span>
+        <input id="renameInput" type="text" required maxlength="120" autocomplete="off" dir="auto" enterkeyhint="done">
+      </label>
+      <p id="renameError" class="field-error" role="alert" hidden></p>
+      <div class="modal-actions">
+        <button type="button" class="button ghost" data-close-dialog="renameDialog" data-i18n="cancel">إلغاء</button>
+        <button type="submit" class="button primary" data-i18n="save">حفظ</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Deletion / discard confirmation -->
+  <dialog id="confirmDialog" class="modal" aria-labelledby="confirmTitle" aria-describedby="confirmMessage">
+    <form method="dialog" class="modal-body">
+      <h2 id="confirmTitle" data-i18n="confirmDeletion">تأكيد الحذف</h2>
+      <p id="confirmMessage"></p>
+      <div class="modal-actions">
+        <button type="submit" value="cancel" class="button ghost" autofocus data-i18n="cancel">إلغاء</button>
+        <button id="confirmActionButton" type="submit" value="confirm" class="button danger" data-i18n="delete">حذف</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- OCR -->
+  <dialog id="ocrDialog" class="modal ocr-modal" aria-labelledby="ocrTitle">
+    <div class="modal-body">
+      <div class="section-heading">
+        <h2 id="ocrTitle" data-i18n="extractText">استخراج النص</h2>
+        <button id="closeOcrButton" type="button" class="button ghost" data-i18n="close">إغلاق</button>
+      </div>
+      <div class="ocr-options">
+        <label class="form-field" for="ocrLanguageSelect">
+          <span data-i18n="textLanguage">لغة النص</span>
+          <select id="ocrLanguageSelect">
+            <option value="ara+eng" data-i18n="arabicEnglish">العربي والإنجليزي</option>
+            <option value="ara" data-i18n="arabic">العربي</option>
+            <option value="eng" data-i18n="english">الإنجليزي</option>
+          </select>
+        </label>
+        <label class="form-field" for="ocrScopeSelect">
+          <span data-i18n="pages">الصفحات</span>
+          <select id="ocrScopeSelect">
+            <option value="all" data-i18n="allPages">كل الصفحات</option>
+            <option value="current" data-i18n="currentPage">الصفحة المحددة</option>
+          </select>
+        </label>
+      </div>
+      <p id="ocrStatus" role="status" class="helper-text" data-i18n="ocrHint">راجع النص المستخرج قبل نسخه؛ الدقة تعتمد على وضوح الصورة.</p>
+      <progress id="ocrProgress" max="1" value="0" hidden aria-label="تقدم استخراج النص" data-i18n-aria="ocrProgress"></progress>
+      <label class="form-field" for="ocrText">
+        <span data-i18n="extractedText">النص المستخرج</span>
+        <textarea id="ocrText" rows="10" dir="auto" spellcheck="false"></textarea>
+      </label>
+      <div class="modal-actions">
+        <button id="startOcrButton" type="button" class="button primary" data-i18n="startOCR">استخراج النص</button>
+        <button id="cancelOcrButton" type="button" class="button danger" hidden data-i18n="stop">إيقاف</button>
+        <button id="copyOcrButton" type="button" class="button secondary" disabled data-i18n="copyText">نسخ النص</button>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- Full page preview -->
+  <dialog id="pagePreviewDialog" class="modal preview-modal" aria-labelledby="pagePreviewTitle">
+    <div class="modal-body">
+      <div class="section-heading">
+        <h2 id="pagePreviewTitle" data-i18n="pagePreview">معاينة الصفحة</h2>
+        <button type="button" class="button ghost" data-close-dialog="pagePreviewDialog" data-i18n="close">إغلاق</button>
+      </div>
+      <img id="pagePreviewImage" class="page-preview-image" alt="صفحة المستند" data-i18n-alt="documentPage">
+      <div class="action-bar">
+        <button id="previousPageButton" type="button" class="button secondary" data-i18n="previousPage">السابقة</button>
+        <span id="pagePreviewCounter" role="status"></span>
+        <button id="nextPageButton" type="button" class="button secondary" data-i18n="nextPage">التالية</button>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- Dynamic card templates -->
+  <template id="documentCardTemplate">
+    <article class="document-card">
+      <label class="document-selection" hidden>
+        <input class="document-checkbox" type="checkbox">
+        <span class="sr-only" data-i18n="selectDocument">تحديد المستند</span>
+      </label>
+      <button type="button" class="document-open">
+        <div class="document-thumbnail"><img class="document-cover" alt="" loading="lazy" decoding="async"></div>
+        <div class="document-info">
+          <h2 class="document-name" dir="auto"></h2>
+          <p class="document-details"></p>
+        </div>
+      </button>
+      <div class="document-card-actions">
+        <button type="button" class="button ghost card-share" data-i18n="share">مشاركة</button>
+        <button type="button" class="button ghost card-download" data-i18n="download">تحميل</button>
+        <button type="button" class="button ghost card-rename" data-i18n="rename">تسمية</button>
+        <button type="button" class="button ghost danger-text card-delete" data-i18n="delete">حذف</button>
+      </div>
+    </article>
+  </template>
+  <template id="pageCardTemplate">
+    <li class="page-card">
+      <div class="page-card-header">
+        <span class="page-number"></span>
+        <button type="button" class="icon-button page-drag-handle" aria-label="سحب لترتيب الصفحة" data-i18n-aria="dragPage">
+          <svg class="icon" aria-hidden="true"><use href="#i-grip"/></svg>
+        </button>
+      </div>
+      <button type="button" class="page-open" aria-label="معاينة الصفحة" data-i18n-aria="pagePreview">
+        <img class="page-thumbnail" alt="" loading="lazy" decoding="async">
+      </button>
+      <div class="page-card-actions">
+        <button type="button" class="button ghost page-move-before" data-i18n="moveBefore">تقديم</button>
+        <button type="button" class="button ghost page-move-after" data-i18n="moveAfter">تأخير</button>
+        <button type="button" class="button ghost danger-text page-delete" data-i18n="delete">حذف</button>
+      </div>
+    </li>
+  </template>
+
+  <div id="busyOverlay" class="busy-overlay" hidden role="status" aria-live="polite" aria-atomic="true">
+    <div class="busy-card">
+      <span class="spinner" aria-hidden="true"></span>
+      <p id="busyMessage" data-i18n="processing">جارٍ المعالجة…</p>
+      <progress id="busyProgress" max="1" value="0" hidden aria-label="تقدم المعالجة" data-i18n-aria="processingProgress"></progress>
+    </div>
+  </div>
+  <div id="toast" class="toast" role="status" aria-live="polite" aria-atomic="true"></div>
+  <div id="alertToast" class="toast error" role="alert" aria-atomic="true"></div>
+</body>
+</html>
