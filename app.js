@@ -388,13 +388,19 @@
     $('reviewAddPageButton').textContent=state.queue.length?t('keepPage'):t('addOnePage');view('review');
   }
   function showCrop(){
+    // Present the crop photo in the same orientation as the result preview.
+    // Bake only quarter turns into the pristine source; cancel restores its snapshot.
+    const turns=state.rotation/90;for(let i=0;i<turns;i++)rotateCrop();
+    state.rotation=0;state.autoRotation=0;
     const target=$('cropCanvas');target.width=state.source.width;target.height=state.source.height;target.getContext('2d').drawImage(state.source,0,0);
     $('cropMessage').textContent=t(state.processorAvailable?'cropHint':'scannerFallback');view('crop');updateCorners();
   }
   async function startEditing(){
-    state.editSnapshot={source:state.source,warped:state.warped,previewSource:state.previewSource,corners:state.corners.map(p=>({...p})),options:editorOptions(),message:state.resultMessage,autoRotation:state.autoRotation};
-    $$('[data-filter]').forEach(button=>button.disabled=!state.processorAvailable&&button.dataset.filter!=='original');
-    view('edit');await renderEdited();await renderFilterThumbnails();
+    await busy(async()=>{
+      state.editSnapshot={source:state.source,warped:state.warped,previewSource:state.previewSource,corners:state.corners.map(p=>({...p})),options:editorOptions(),message:state.resultMessage,autoRotation:state.autoRotation};
+      $$('[data-filter]').forEach(button=>button.disabled=!state.processorAvailable&&button.dataset.filter!=='original');
+      view('edit');await renderEdited();await renderFilterThumbnails();
+    });
   }
   async function applyEditing(){
     await busy(async()=>{await state.previewPromise;state.resultMessage='editsReady';state.autoRotation=0;await showReview();state.editSnapshot=null;});
@@ -429,14 +435,14 @@
     let filtered;
     if(state.processorAvailable&&options.filter!=='original')filtered=canvasFromPixels(await scanner.enhance(source,options));
     else {
-      filtered=rotateCanvas(source,0);
+      filtered=options.brightness||options.contrast?rotateCanvas(source,0):source;
       if(options.brightness||options.contrast){
         const ctx=filtered.getContext('2d'),image=ctx.getImageData(0,0,filtered.width,filtered.height),gain=(100+options.contrast)/100;
         for(let i=0;i<image.data.length;i+=4)for(let c=0;c<3;c++)image.data[i+c]=(image.data[i+c]-128)*gain+128+options.brightness*2;
         ctx.putImageData(image,0,0);
       }
     }
-    return rotateCanvas(filtered,options.rotation||0);
+    return options.rotation?rotateCanvas(filtered,options.rotation):filtered;
   }
   function rotateCanvas(source,rotation) {
     const sideways=rotation%180!==0,out=canvas(sideways?source.height:source.width,sideways?source.width:source.height),ctx=out.getContext('2d');
@@ -648,7 +654,7 @@
     if(!await leaveCurrent())return;view(name);if(name==='library')renderLibrary();else{refreshStorage();checkOffline();}
   }
   async function cancelEditing(){
-    if(!await confirm(t('discard'),t('discardTitle'),t('discardAction')))return;state.queue=[];state.source=null;state.warped=null;state.previewSource=null;state.retakeId=null;
+    if(!await confirm(t('discard'),t('discardTitle'),t('discardAction')))return;state.queue=[];clearCurrentImage();state.retakeId=null;
     if(state.doc?.pages.length){view('document');renderDocument();}else{state.doc=null;state.dirty=false;view('library');renderLibrary();}
   }
   function bindEvents(){
@@ -666,13 +672,16 @@
     $('captureButton').onclick=safe(captureImage);$('retryCameraButton').onclick=safe(startCamera);$('closeScanButton').onclick=safe(async()=>{state.retakeId=null;if(state.doc?.pages.length){view('document');renderDocument();}else await navigate('library');});
     $('autoCaptureToggle').onchange=()=>state.stableSince=performance.now();
     $('torchButton').onclick=safe(async()=>{const track=state.stream?.getVideoTracks()[0];if(!track)return;await track.applyConstraints({advanced:[{torch:!state.torch}]});state.torch=!state.torch;$('torchButton').setAttribute('aria-pressed',String(state.torch));});
-    bindCropHandles();$('fullImageButton').onclick=()=>{state.corners=[{x:0,y:0},{x:1,y:0},{x:1,y:1},{x:0,y:1}];updateCorners();};$('confirmCropButton').onclick=safe(cropImage);$('cancelCropButton').onclick=safe(cancelEditing);
+    $('reviewSaveButton').onclick=safe(()=>acceptPage('save'));$('reviewAddPageButton').onclick=safe(()=>acceptPage('add'));
+    $('reviewEditButton').onclick=safe(startEditing);$('reviewRetakeButton').onclick=safe(()=>retakeImage());$('closeReviewButton').onclick=safe(cancelEditing);
+    bindCropHandles();$('fullImageButton').onclick=()=>{state.corners=fullCorners();updateCorners();};$('confirmCropButton').onclick=safe(cropImage);$('cancelCropButton').onclick=safe(cancelOptionalEditing);
     $('rotateCropButton').onclick=rotateCrop;$('retakeCropButton').onclick=safe(()=>retakeImage());
-    $('backToCropButton').onclick=()=>{view('crop');updateCorners();};
+    $('backToCropButton').onclick=showCrop;
     $$('[data-filter]').forEach(button=>button.onclick=safe(()=>{state.filter=button.dataset.filter;return renderEdited();}));
     let editTimer;$('brightnessRange').oninput=$('contrastRange').oninput=()=>{clearTimeout(editTimer);editTimer=setTimeout(safe(renderEdited),90);};
     $('rotateButton').onclick=safe(()=>{state.rotation=(state.rotation+90)%360;return renderEdited();});
-    $('resetAdjustmentsButton').onclick=safe(()=>{state.rotation=0;state.filter=state.processorAvailable?'document':'original';$('brightnessRange').value=$('contrastRange').value=0;return renderEdited();});$('acceptPageButton').onclick=safe(acceptPage);
+    $('resetAdjustmentsButton').onclick=safe(()=>{state.rotation=state.editSnapshot?.options.rotation||0;state.filter=state.processorAvailable?'auto':'original';$('brightnessRange').value=$('contrastRange').value=0;return renderEdited();});
+    $('acceptPageButton').onclick=safe(applyEditing);$('cancelEditButton').onclick=safe(cancelOptionalEditing);$('restoreOriginalButton').onclick=safe(restoreOriginal);
     $('closeDocumentButton').onclick=safe(()=>navigate('library'));$('addPageButton').onclick=safe(async()=>{state.queue=[];state.retakeId=null;view('scan');await startCamera();});
     $('saveDraftButton').onclick=showSaveDialog;$('saveForm').onsubmit=saveDraft;$('savePageChangesButton').onclick=safe(saveChanges);
     $$('[name="outputFormat"]').forEach(radio=>radio.onchange=()=>{$('jpgHint').hidden=document.querySelector('[name="outputFormat"]:checked').value!=='jpg';});
@@ -695,7 +704,7 @@
     addEventListener('appinstalled',()=>{state.installEvent=null;$('installBanner').hidden=true;$('settingsInstallButton').hidden=true;});
     const connectivity=()=>$('offlineBadge').hidden=navigator.onLine;addEventListener('online',connectivity);addEventListener('offline',connectivity);connectivity();
     document.addEventListener('visibilitychange',()=>{if(document.hidden&&state.stream){stopCamera();$('cameraStatus').textContent=t('cameraPaused');$('retryCameraButton').hidden=false;}});
-    addEventListener('pagehide',()=>{stopCamera();state.ocrWorker?.terminate();scanner.dispose();state.scannerPromise=null;});
+    addEventListener('pagehide',()=>{stopCamera();state.ocrWorker?.terminate();orientation.dispose();scanner.dispose();state.scannerPromise=null;});
     addEventListener('beforeunload',event=>{if(state.dirty||['crop','edit'].includes(state.view)){event.preventDefault();event.returnValue='';}});
   }
   async function init(){

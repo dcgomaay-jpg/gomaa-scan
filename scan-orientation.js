@@ -47,7 +47,9 @@
         if (!result) { dispose(); return { rotation: 0, confident: false }; }
         const degrees = Number(result.data.orientation_degrees), confidence = Number(result.data.orientation_confidence);
         const confident = Number.isFinite(confidence) && confidence >= 15 && [0, 90, 180, 270].includes(degrees);
-        idle(); return { rotation: confident ? (360 - degrees) % 360 : 0, confident, confidence };
+        // Tesseract.js returns the corrective clockwise rotation, verified on
+        // upright, sideways and upside-down pages (not the input camera angle).
+        idle(); return { rotation: confident ? degrees : 0, confident, confidence };
       } catch { dispose(); return { rotation: 0, confident: false }; }
     }
     return { prepare, angle, dispose };

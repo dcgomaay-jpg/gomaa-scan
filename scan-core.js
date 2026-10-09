@@ -72,7 +72,8 @@
     }
     function confidence(points, gray) {
       // Check the actual paper/background boundary, not just a rectangular contour.
-      const sample = (x, y) => gray.data[Math.round(Math.max(0, Math.min(gray.rows - 1, y))) * gray.cols + Math.round(Math.max(0, Math.min(gray.cols - 1, x)))];
+      const values = gray.data;
+      const sample = (x, y) => values[Math.round(Math.max(0, Math.min(gray.rows - 1, y))) * gray.cols + Math.round(Math.max(0, Math.min(gray.cols - 1, x)))];
       const contrasts = [];
       for (let edge = 0; edge < 4; edge++) {
         const a = points[edge], b = points[(edge + 1) % 4], length = distance(a, b);
@@ -152,18 +153,26 @@
           cv.resize(background, fullBackground, new cv.Size(frame.width, frame.height), 0, 0, cv.INTER_LINEAR);
           const rgb = keep(new cv.Mat()), denoised = keep(new cv.Mat()), normalized = keep(new cv.Mat()), softened = keep(new cv.Mat());
           cv.cvtColor(src, rgb, cv.COLOR_RGBA2RGB);
-          cv.bilateralFilter(rgb, denoised, 5, 16, 3, cv.BORDER_REPLICATE);
+          cv.GaussianBlur(rgb, denoised, new cv.Size(3, 3), 0.7, 0.7, cv.BORDER_REPLICATE);
+          // Keep strong ink edges intact while smoothing low-amplitude noise.
+          const raw = rgb.data, smooth = denoised.data;
+          for (let i = 0; i < raw.length; i += 3) {
+            const edge = Math.max(Math.abs(raw[i] - smooth[i]), Math.abs(raw[i + 1] - smooth[i + 1]), Math.abs(raw[i + 2] - smooth[i + 2]));
+            for (let c = 0; c < 3; c++) smooth[i + c] = edge >= 10 ? raw[i + c] : smooth[i + c] * 0.75 + raw[i + c] * 0.25;
+          }
           denoised.copyTo(normalized);
-          for (let i = 0; i < fullBackground.data.length; i++) {
-            const gain = Math.min(3.5, 245 / Math.max(40, fullBackground.data[i]));
-            for (let c = 0; c < 3; c++) normalized.data[i * 3 + c] = Math.min(255, denoised.data[i * 3 + c] * gain);
+          const illumination = fullBackground.data, normalizedData = normalized.data, normalizationInput = denoised.data;
+          for (let i = 0; i < illumination.length; i++) {
+            const gain = Math.min(3.5, 245 / Math.max(40, illumination[i]));
+            for (let c = 0; c < 3; c++) normalizedData[i * 3 + c] = Math.min(255, normalizationInput[i * 3 + c] * gain);
           }
           cv.GaussianBlur(normalized, softened, new cv.Size(0, 0), 0.8);
           normalized.copyTo(result);
           // Thresholded, mild unsharp mask: preserve fine ink and avoid sharpening noise.
-          for (let i = 0; i < result.data.length; i++) {
-            const detail = normalized.data[i] - softened.data[i];
-            if (Math.abs(detail) >= 3) result.data[i] = Math.max(0, Math.min(255, normalized.data[i] + detail * 0.28));
+          const sharpenInput = normalized.data, softenedData = softened.data, resultData = result.data;
+          for (let i = 0; i < resultData.length; i++) {
+            const detail = sharpenInput[i] - softenedData[i];
+            if (Math.abs(detail) >= 3) resultData[i] = Math.max(0, Math.min(255, sharpenInput[i] + detail * 0.28));
           }
         } else if (filter === 'document' || filter === 'shadows') {
           const background = keep(new cv.Mat());
@@ -174,16 +183,18 @@
           cv.dilate(gray, background, kernel);
           cv.GaussianBlur(background, background, new cv.Size(0, 0), Math.max(3, size * 0.7));
           if (filter === 'document') {
-            for (let i = 0; i < background.data.length; i++) background.data[i] = Math.max(32, background.data[i]);
+            const backgroundData = background.data;
+            for (let i = 0; i < backgroundData.length; i++) backgroundData[i] = Math.max(32, backgroundData[i]);
             const foregroundFloat = keep(new cv.Mat()), backgroundFloat = keep(new cv.Mat()), normalized = keep(new cv.Mat());
             gray.convertTo(foregroundFloat, cv.CV_32F); background.convertTo(backgroundFloat, cv.CV_32F);
             cv.divide(foregroundFloat, backgroundFloat, normalized, 255);
             normalized.convertTo(result, cv.CV_8U, 1.10, -20);
           } else {
             src.copyTo(result);
-            for (let i = 0; i < background.data.length; i++) {
-              const gain = 250 / Math.max(32, background.data[i]);
-              for (let c = 0; c < 3; c++) result.data[i * 4 + c] = Math.min(255, src.data[i * 4 + c] * gain);
+            const backgroundData = background.data, sourceData = src.data, resultData = result.data;
+            for (let i = 0; i < backgroundData.length; i++) {
+              const gain = 250 / Math.max(32, backgroundData[i]);
+              for (let c = 0; c < 3; c++) resultData[i * 4 + c] = Math.min(255, sourceData[i * 4 + c] * gain);
             }
           }
         } else if (filter === 'bw') {

@@ -1,11 +1,11 @@
 /* Increment VERSION whenever app shell files change. Documents live in IndexedDB. */
-const VERSION = 'v2.1-scanner';
+const VERSION = 'v3.1-auto-scanner';
 const SHELL_CACHE = 'gomaa-scan-shell-' + VERSION;
 const LIBRARY_CACHE = 'gomaa-scan-libraries-' + VERSION;
 const BASE = self.registration.scope;
 const SHELL = [
   './', './index.html', './style.css', './app.js', './manifest.json',
-  './scan-core.js', './scan-engine.js', './scan-worker.js',
+  './scan-core.js', './scan-engine.js', './scan-worker.js', './scan-orientation.js',
   './icons/logo.svg', './icons/icon-192.png', './icons/icon-512.png', './icons/apple-touch-icon.png'
 ].map(path => new URL(path, BASE).href);
 const RESOURCES = [
@@ -19,6 +19,7 @@ const RESOURCES = [
   ]),
   'https://tessdata.projectnaptha.com/4.0.0/ara.traineddata.gz',
   'https://tessdata.projectnaptha.com/4.0.0/eng.traineddata.gz',
+  'https://tessdata.projectnaptha.com/4.0.0/osd.traineddata.gz',
   ...['arabic', 'latin'].flatMap(subset => [400,700].map(weight =>
     `https://cdn.jsdelivr.net/npm/@fontsource/cairo@5.3.0/files/cairo-${subset}-${weight}-normal.woff2`
   ))
