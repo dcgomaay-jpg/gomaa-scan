@@ -249,8 +249,8 @@
   function normalizedPoints(points,source) {
     return points.map(p=>({x:p.x/(source.width-1),y:p.y/(source.height-1)}));
   }
-  async function detectCorners(input) {
-    const result=await scanner.detect(input);
+  async function detectCorners(input,options={}) {
+    const result=await scanner.detect(input,options);
     return result.safeToCrop?normalizedPoints(result.points,input):null;
   }
   function stopCamera() {
@@ -281,7 +281,7 @@
       if(video.readyState>=2){
         const scale=Math.min(1,480/video.videoHeight,720/video.videoWidth);sample.width=Math.round(video.videoWidth*scale);sample.height=Math.round(video.videoHeight*scale);
         sample.getContext('2d',{willReadFrequently:true}).drawImage(video,0,0,sample.width,sample.height);
-        const corners=await detectCorners(sample);
+        const corners=await detectCorners(sample,{fast:true});
         if(token!==state.cameraToken||state.view!=='scan')return;drawCameraCorners(corners);
         if(corners){
           const stable=state.stableAnchor&&corners.every((p,i)=>Math.hypot(p.x-state.stableAnchor[i].x,p.y-state.stableAnchor[i].y)<.022);
@@ -306,7 +306,7 @@
   async function beginImage(source) {
     clearCurrentImage();state.source=source;state.originalSource=source;let detected=null;
     orientation.prepare();
-    try {if(!state.processorFailed){await ensureScanner();detected=await detectCorners(source);}}
+    try {if(!state.processorFailed){await ensureScanner();detected=await detectCorners(source,{thorough:true});}}
     catch(error){scannerFailure(error);}
     state.corners=detected||fullCorners();state.rotation=0;state.autoRotation=0;
     $('brightnessRange').value=$('contrastRange').value=0;

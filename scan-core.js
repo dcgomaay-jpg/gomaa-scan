@@ -47,16 +47,16 @@
       const limit = Math.min(mat.rows, mat.cols);
       return Math.max(3, Math.min(desired, limit % 2 ? limit : limit - 1));
     }
-    function findQuad(mask, keep) {
+    function findQuads(mask, keep) {
       const contours = keep(new cv.MatVector()), hierarchy = keep(new cv.Mat());
       cv.findContours(mask, contours, hierarchy, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
       const total = mask.rows * mask.cols;
-      let best = null, bestArea = total * 0.20;
+      const candidates = [];
       for (let i = 0; i < contours.size(); i++) {
         const contour = contours.get(i), approx = new cv.Mat();
         try {
           const area = Math.abs(cv.contourArea(contour));
-          if (area <= bestArea || area >= total * 0.985) continue;
+          if (area <= total * 0.20 || area >= total * 0.985) continue;
           const perimeter = cv.arcLength(contour, true);
           for (const epsilon of [0.02, 0.03, 0.04]) {
             cv.approxPolyDP(contour, approx, perimeter * epsilon, true);
@@ -64,13 +64,13 @@
             if (Math.abs(cv.contourArea(approx)) <= total * 0.20) continue;
             const points = Array.from({ length: 4 }, (_, j) => ({ x: approx.data32S[j * 2], y: approx.data32S[j * 2 + 1] }));
             const ordered = orderPoints(points);
-            if (validQuad(ordered)) { best = ordered; bestArea = area; break; }
+            if (validQuad(ordered)) { candidates.push({ points: ordered, area }); break; }
           }
         } finally { approx.delete(); contour.delete(); }
       }
-      return best;
+      return candidates.sort((a, b) => b.area - a.area).slice(0, 32);
     }
-    function confidence(points, gray) {
+    function confidence(points, gray, allowWeak = false) {
       // Check the actual paper/background boundary, not just a rectangular contour.
       const values = gray.data;
       const sample = (x, y) => values[Math.round(Math.max(0, Math.min(gray.rows - 1, y))) * gray.cols + Math.round(Math.max(0, Math.min(gray.cols - 1, x)))];
@@ -78,47 +78,156 @@
       for (let edge = 0; edge < 4; edge++) {
         const a = points[edge], b = points[(edge + 1) % 4], length = distance(a, b);
         const nx = -(b.y - a.y) / length, ny = (b.x - a.x) / length;
-        let supported = 0, difference = 0;
+        let supported = 0, difference = 0, weakSupported = 0, weakDifference = 0;
         for (let i = 1; i <= 18; i++) {
           const t = i / 19, x = a.x + (b.x - a.x) * t, y = a.y + (b.y - a.y) * t;
           const delta = sample(x + nx * 6, y + ny * 6) - sample(x - nx * 6, y - ny * 6);
           difference += delta; if (delta > 8) supported++;
+          const step = [3, 5, 7].reduce((sum, offset) => sum + sample(x + nx * offset, y + ny * offset) - sample(x - nx * offset, y - ny * offset), 0) / 3;
+          weakDifference += step; if (step >= 1.5) weakSupported++;
         }
-        contrasts.push({ mean: difference / 18, support: supported / 18 });
+        contrasts.push({ mean: difference / 18, support: supported / 18, weakMean: weakDifference / 18, weakSupport: weakSupported / 18 });
       }
       const clipped = points.some(p => p.x < 3 || p.y < 3 || p.x > gray.cols - 4 || p.y > gray.rows - 4);
       const mean = contrasts.reduce((sum, edge) => sum + edge.mean, 0) / 4;
       const weakest = Math.min(...contrasts.map(edge => edge.support));
       const score = Math.max(0, Math.min(1, 0.35 + Math.min(0.4, Math.max(0, mean) / 100) + weakest * 0.25));
-      return { confidence: score, safeToCrop: !clipped && mean > 12 && weakest >= 0.5 && score >= 0.72,
-        reason: clipped ? 'clipped' : weakest < 0.5 ? 'uncertainBoundary' : 'boundary', boundaryContrast: mean };
+      const strong = !clipped && mean > 12 && weakest >= 0.5 && score >= 0.72;
+      // A faint paper edge must still form four consistent light/dark steps and
+      // enclose actual text/ink. This rejects printed table borders and blank noise.
+      const weakBoundary = !clipped && contrasts.every(edge => edge.weakMean >= 1.2 && edge.weakSupport >= 0.44);
+      let ink = 0, outsideInk = 0;
+      if (allowWeak && !strong && weakBoundary) {
+        for (let row = 0; row < 28; row++) for (let col = 0; col < 20; col++) {
+          const u = 0.07 + col / 19 * 0.86, v = 0.07 + row / 27 * 0.86;
+          const x = (1-v)*((1-u)*points[0].x+u*points[1].x)+v*((1-u)*points[3].x+u*points[2].x);
+          const y = (1-v)*((1-u)*points[0].y+u*points[1].y)+v*((1-u)*points[3].y+u*points[2].y);
+          const local = (sample(x-2,y)+sample(x+2,y)+sample(x,y-2)+sample(x,y+2))/4;
+          if (local - sample(x,y) >= 8) ink++;
+        }
+        // Reject an interior form/table rectangle if text or stamps continue just
+        // outside it. The page boundary must enclose its content, not bisect it.
+        for(let edge=0;edge<4;edge++){
+          const a=points[edge],b=points[(edge+1)%4],length=distance(a,b),nx=-(b.y-a.y)/length,ny=(b.x-a.x)/length;
+          for(let j=1;j<=26;j++)for(const offset of [2,4,6,9,13]){
+            const t=j/27,x=a.x+(b.x-a.x)*t-nx*offset,y=a.y+(b.y-a.y)*t-ny*offset;
+            const local=(sample(x-2,y)+sample(x+2,y)+sample(x,y-2)+sample(x,y+2))/4;
+            if(local-sample(x,y)>=8)outsideInk++;
+          }
+        }
+      }
+      const weak = allowWeak && weakBoundary && ink >= 6 && outsideInk<=Math.max(3,ink*.08);
+      return { confidence: strong ? score : weak ? 0.75 + Math.min(0.12, Math.min(...contrasts.map(edge=>edge.weakSupport))*0.15) : Math.min(0.69,score),
+        safeToCrop: strong || weak, weakBoundary: weak, inkSamples: ink, outsideInkSamples: outsideInk,
+        reason: strong ? 'boundary' : weak ? 'recoveredBoundary' : clipped ? 'clipped' : 'uncertainBoundary', boundaryContrast: mean };
+    }
+    function recoverLines(mask, gray, keep) {
+      const lines = keep(new cv.Mat()), groups = { horizontal: [], vertical: [] };
+      const min = Math.min(gray.rows, gray.cols);
+      const grayData=gray.data,sample=(x,y)=>grayData[Math.round(Math.max(0,Math.min(gray.rows-1,y)))*gray.cols+Math.round(Math.max(0,Math.min(gray.cols-1,x)))];
+      cv.HoughLinesP(mask, lines, 1, Math.PI / 180, Math.max(20, Math.round(min*0.09)), min*0.18, min*0.055);
+      const values = lines.data32S;
+      for (let i=0;i<lines.rows;i++) {
+        const [x1,y1,x2,y2] = Array.from(values.subarray(i*4,i*4+4)), dx=x2-x1, dy=y2-y1;
+        let direction;
+        if (Math.abs(dx)>Math.abs(dy)*2) direction='horizontal';
+        else if (Math.abs(dy)>Math.abs(dx)*2) direction='vertical'; else continue;
+        const horizontal=direction==='horizontal', slope=horizontal?dy/dx:dx/dy;
+        const length=Math.hypot(dx,dy),nx=-dy/length,ny=dx/length,steps=[];
+        for(let j=1;j<=12;j++){const t=j/13,x=x1+dx*t,y=y1+dy*t;steps.push([3,5,7].reduce((sum,d)=>sum+sample(x+nx*d,y+ny*d)-sample(x-nx*d,y-ny*d),0)/3);}
+        const stepMean=steps.reduce((sum,value)=>sum+value,0)/steps.length;
+        const consistent=steps.filter(value=>Math.sign(value)===Math.sign(stepMean)&&Math.abs(value)>=1).length/steps.length;
+        if(Math.abs(stepMean)<1||consistent<.5)continue;
+        const center=horizontal?gray.cols/2:gray.rows/2;
+        const offset=horizontal?y1+slope*(center-x1):x1+slope*(center-y1);
+        const lo=Math.min(horizontal?x1:y1,horizontal?x2:y2),hi=Math.max(horizontal?x1:y1,horizontal?x2:y2);
+        const list=groups[direction],near=list.find(line=>Math.abs(line.offset-offset)<3&&Math.abs(line.slope-slope)<0.035);
+        if(near){const weight=near.weight+length;near.slope=(near.slope*near.weight+slope*length)/weight;near.offset=(near.offset*near.weight+offset*length)/weight;near.weight=weight;near.lo=Math.min(near.lo,lo);near.hi=Math.max(near.hi,hi);}
+        else list.push({slope,offset,lo,hi,weight:length,horizontal});
+      }
+      for(const direction of ['horizontal','vertical']) groups[direction]=groups[direction].filter(line=>line.hi-line.lo>min*0.30&&line.offset>3&&line.offset<(line.horizontal?gray.rows:gray.cols)-4).sort((a,b)=>(b.hi-b.lo)-(a.hi-a.lo)).slice(0,14);
+      function intersect(h,v){
+        const hc=h.offset-h.slope*gray.cols/2,vc=v.offset-v.slope*gray.rows/2,denominator=1-h.slope*v.slope;
+        if(Math.abs(denominator)<0.1)return null;
+        const y=(h.slope*vc+hc)/denominator;return {x:v.slope*y+vc,y};
+      }
+      function coverage(line,a,b){const lo=Math.min(line.horizontal?a.x:a.y,line.horizontal?b.x:b.y),hi=Math.max(line.horizontal?a.x:a.y,line.horizontal?b.x:b.y),span=hi-lo;
+        return {covered:Math.max(0,Math.min(hi,line.hi)-Math.max(lo,line.lo))/span,extra:(Math.max(0,line.lo-lo)+Math.max(0,hi-line.hi))/span};}
+      let best=null;
+      const horizontal=groups.horizontal,vertical=groups.vertical;
+      for(let i=0;i<horizontal.length;i++)for(let j=i+1;j<horizontal.length;j++){
+        const [top,bottom]=[horizontal[i],horizontal[j]].sort((a,b)=>a.offset-b.offset);if(bottom.offset-top.offset<gray.rows*.25)continue;
+        for(let k=0;k<vertical.length;k++)for(let l=k+1;l<vertical.length;l++){
+          const [left,right]=[vertical[k],vertical[l]].sort((a,b)=>a.offset-b.offset);if(right.offset-left.offset<gray.cols*.25)continue;
+          const points=[intersect(top,left),intersect(top,right),intersect(bottom,right),intersect(bottom,left)];
+          if(points.some(p=>!p||p.x<3||p.y<3||p.x>gray.cols-4||p.y>gray.rows-4)||!validQuad(points))continue;
+          const area=points.reduce((sum,p,index)=>{const next=points[(index+1)%4];return sum+p.x*next.y-next.x*p.y;},0)/2;
+          if(area<gray.cols*gray.rows*.20||area>gray.cols*gray.rows*.96)continue;
+          const spans=[coverage(top,points[0],points[1]),coverage(right,points[1],points[2]),coverage(bottom,points[2],points[3]),coverage(left,points[3],points[0])];
+          if(spans.some(span=>span.covered<.65||span.extra>.30))continue;
+          const certainty=confidence(points,gray,true);if(!certainty.safeToCrop)continue;
+          const rank=certainty.confidence+spans.reduce((sum,span)=>sum+span.covered*.07-span.extra*.18,0)+area/(gray.cols*gray.rows)*.05;
+          if(!best||rank>best.rank)best={points,area,rank,...certainty};
+        }
+      }
+      return best;
     }
     function detect(frame, options = {}) {
       return managed(keep => {
         const src = read(frame, keep), small = keep(new cv.Mat());
-        const scale = Math.min(1, 500 / frame.height, 900 / frame.width);
+        const scale = Math.min(1, (options.thorough ? 900 : 500) / frame.height, (options.thorough ? 1200 : 900) / frame.width);
         cv.resize(src, small, new cv.Size(Math.max(2, Math.round(frame.width * scale)), Math.max(2, Math.round(frame.height * scale))), 0, 0, cv.INTER_AREA);
         const gray = keep(new cv.Mat()), blur = keep(new cv.Mat()), mask = keep(new cv.Mat());
         cv.cvtColor(small, gray, cv.COLOR_RGBA2GRAY);
         cv.GaussianBlur(gray, blur, new cv.Size(5, 5), 0);
-        let points = null, method = 'canny';
+        let best = null, uncertain = null;
+        function consider(candidates, method, allowWeak = false) {
+          for (const candidate of candidates) {
+            const checked = {...candidate, method, ...confidence(candidate.points,gray,allowWeak)};
+            if(checked.safeToCrop){best=checked;return true;}
+            if(!uncertain||checked.confidence>uncertain.confidence)uncertain=checked;
+          }
+          return false;
+        }
         if (!options.thresholdOnly) {
           cv.Canny(blur, mask, 45, 135);
           cv.dilate(mask, mask, keep(cv.Mat.ones(3, 3, cv.CV_8U)));
-          points = findQuad(mask, keep);
+          consider(findQuads(mask, keep),'canny');
         }
-        if (!points && Math.min(blur.rows, blur.cols) >= 3) {
-          method = 'adaptive';
+        if (!best && Math.min(blur.rows, blur.cols) >= 3) {
           const kernel = keep(cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(9, 9)));
           for (const threshold of [cv.THRESH_BINARY, cv.THRESH_BINARY_INV]) {
             cv.adaptiveThreshold(blur, mask, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, threshold, blockSize(blur, 51), 7);
             cv.morphologyEx(mask, mask, cv.MORPH_CLOSE, kernel);
-            points = findQuad(mask, keep);
-            if (points) break;
+            if (consider(findQuads(mask, keep),'adaptive')) break;
           }
         }
-        if (!points) return { found: false, safeToCrop: false, confidence: 0, method: 'full', points: insetQuad(frame.width, frame.height, 0) };
-        return { found: true, method, ...confidence(points, gray), points: points.map(p => ({
+        if(!best&&!options.fast&&!options.thresholdOnly){
+          cv.GaussianBlur(gray,blur,new cv.Size(3,3),0);
+          const close=keep(cv.Mat.ones(3,3,cv.CV_8U));
+          for(const [low,high] of [[15,45],[6,18]]){
+            cv.Canny(blur,mask,low,high);cv.morphologyEx(mask,mask,cv.MORPH_CLOSE,close);
+            if(consider(findQuads(mask,keep),'lowContrast',true))break;
+          }
+          if(!best&&typeof cv.CLAHE==='function'){
+            const equalized=keep(new cv.Mat()),clahe=keep(new cv.CLAHE(3,new cv.Size(8,8)));
+            clahe.apply(blur,equalized);cv.Canny(equalized,mask,12,36);cv.morphologyEx(mask,mask,cv.MORPH_CLOSE,close);
+            consider(findQuads(mask,keep),'localContrast',true);
+          }
+          if(!best){
+            cv.Canny(blur,mask,4,12);cv.morphologyEx(mask,mask,cv.MORPH_CLOSE,close);
+            const recovered=recoverLines(mask,gray,keep);
+            if(recovered){
+              // Keep a small protective margin around recovered faint edges.
+              const center=recovered.points.reduce((sum,p)=>({x:sum.x+p.x/4,y:sum.y+p.y/4}),{x:0,y:0});
+              recovered.points=recovered.points.map(p=>({x:Math.max(0,Math.min(gray.cols-1,p.x+Math.sign(p.x-center.x)*1.5)),y:Math.max(0,Math.min(gray.rows-1,p.y+Math.sign(p.y-center.y)*1.5))}));
+              best={...recovered,method:'edgeLines'};
+            }
+          }
+        }
+        if(!best)return {found:!!uncertain,safeToCrop:false,confidence:uncertain?.confidence||0,method:'full',points:insetQuad(frame.width,frame.height,0)};
+        const {rank,area,...result}=best;
+        return { found: true, ...result, points: result.points.map(p => ({
           x: p.x * (frame.width - 1) / (small.cols - 1), y: p.y * (frame.height - 1) / (small.rows - 1)
         })) };
       });

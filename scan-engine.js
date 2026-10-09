@@ -72,8 +72,9 @@
       return type === 'warp' ? main.warp(frame, corners) : main[type](frame, options);
     }
     async function detect(source, options) {
-      // Detection never transfers a full camera frame: ~500px tall is enough.
-      const scale = Math.min(1, 500 / source.height, 900 / source.width);
+      // Keep live analysis small; after capture use more detail for faint edges.
+      // Neither path transfers the full-resolution camera photo for detection.
+      const scale = Math.min(1, (options?.thorough ? 900 : 500) / source.height, (options?.thorough ? 1200 : 900) / source.width);
       let sample = source;
       if (scale < 1) {
         sample = document.createElement('canvas');
