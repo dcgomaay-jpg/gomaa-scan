@@ -17,6 +17,9 @@
   <link rel="apple-touch-icon" sizes="180x180" href="./icons/apple-touch-icon.png">
   <link rel="stylesheet" href="./style.css">
   <!-- app.js loads the pinned CDN libraries and registers sw.js. -->
+  <script defer src="./scan-core.js"></script>
+  <script defer src="./scan-engine.js"></script>
+  <script defer src="./scan-orientation.js"></script>
   <script defer src="./app.js"></script>
 </head>
 <body>
@@ -172,12 +175,30 @@
           <canvas id="magnifierCanvas" class="magnifier" width="160" height="160" hidden aria-hidden="true"></canvas>
         </div>
         <div class="action-bar">
-          <button id="fullImageButton" type="button" class="button secondary" data-i18n="useFullImage">تحديد الصورة كاملة</button>
-          <button id="confirmCropButton" type="button" class="button primary" data-i18n="confirmCrop">قص وتصحيح المنظور</button>
+          <button id="retakeCropButton" type="button" class="button secondary" data-i18n="retake">إعادة التصوير</button>
+          <button id="fullImageButton" type="button" class="button secondary" data-i18n="useFullImage">ملء الصورة</button>
+          <button id="rotateCropButton" type="button" class="button secondary" data-i18n="rotateCrop">تدوير</button>
+          <button id="confirmCropButton" type="button" class="button primary" data-i18n="confirmCrop">تم</button>
         </div>
       </section>
 
-      <!-- Filters -->
+      <!-- Automatic result: manual tools are optional. -->
+      <section id="reviewView" class="view" hidden aria-labelledby="reviewTitle">
+        <div class="section-heading">
+          <h1 id="reviewTitle" data-i18n="scanResult">المستند جاهز</h1>
+          <button id="closeReviewButton" type="button" class="icon-button" aria-label="إغلاق" data-i18n-aria="close"><svg class="icon" aria-hidden="true"><use href="#i-close"/></svg></button>
+        </div>
+        <div class="editor-stage"><canvas id="autoPreviewCanvas" aria-label="معاينة المستند" data-i18n-aria="documentPreview"></canvas></div>
+        <p id="autoResultStatus" class="helper-text preview-status" role="status" aria-live="polite"></p>
+        <div class="action-bar">
+          <button id="reviewSaveButton" type="button" class="button primary" data-i18n="save">حفظ</button>
+          <button id="reviewAddPageButton" type="button" class="button secondary" data-i18n="addOnePage">إضافة صفحة</button>
+          <button id="reviewEditButton" type="button" class="button secondary" data-i18n="optionalEdit">تعديل</button>
+          <button id="reviewRetakeButton" type="button" class="button ghost" data-i18n="retake">إعادة التصوير</button>
+        </div>
+      </section>
+
+      <!-- Optional filters -->
       <section id="editView" class="view" hidden aria-labelledby="editTitle">
         <div class="section-heading">
           <h1 id="editTitle" data-i18n="enhanceImage">توضيح الصورة</h1>
@@ -186,24 +207,31 @@
         <div class="editor-stage">
           <canvas id="editCanvas" aria-label="معاينة الصورة المعدلة" data-i18n-aria="editedPreview"></canvas>
         </div>
+        <p id="filterPreviewStatus" class="helper-text preview-status" role="status" aria-live="polite"></p>
         <div id="filterStrip" class="filter-strip" role="group" aria-label="فلاتر الصورة" data-i18n-aria="imageFilters">
-          <button type="button" class="filter-button active" data-filter="original" aria-pressed="true">
-            <canvas width="96" height="128" aria-hidden="true"></canvas><span data-i18n="filterOriginal">Original</span>
+          <button type="button" class="filter-button active" data-filter="auto" aria-pressed="true">
+            <canvas width="96" height="128" aria-hidden="true"></canvas><span data-i18n="filterAuto">تلقائي</span>
+          </button>
+          <button type="button" class="filter-button" data-filter="document" aria-pressed="false">
+            <canvas width="96" height="128" aria-hidden="true"></canvas><span data-i18n="filterDocument">مستند</span>
+          </button>
+          <button type="button" class="filter-button" data-filter="original" aria-pressed="false">
+            <canvas width="96" height="128" aria-hidden="true"></canvas><span data-i18n="filterOriginal">أصلي</span>
           </button>
           <button type="button" class="filter-button" data-filter="magic" aria-pressed="false">
-            <canvas width="96" height="128" aria-hidden="true"></canvas><span data-i18n="filterMagic">Magic Color</span>
+            <canvas width="96" height="128" aria-hidden="true"></canvas><span data-i18n="filterMagic">ألوان محسّنة</span>
           </button>
           <button type="button" class="filter-button" data-filter="bw" aria-pressed="false">
-            <canvas width="96" height="128" aria-hidden="true"></canvas><span data-i18n="filterBW">Black &amp; White</span>
+            <canvas width="96" height="128" aria-hidden="true"></canvas><span data-i18n="filterBW">أبيض وأسود</span>
           </button>
           <button type="button" class="filter-button" data-filter="gray" aria-pressed="false">
-            <canvas width="96" height="128" aria-hidden="true"></canvas><span data-i18n="filterGray">Grayscale</span>
+            <canvas width="96" height="128" aria-hidden="true"></canvas><span data-i18n="filterGray">رمادي</span>
           </button>
           <button type="button" class="filter-button" data-filter="lighten" aria-pressed="false">
-            <canvas width="96" height="128" aria-hidden="true"></canvas><span data-i18n="filterLighten">Lighten</span>
+            <canvas width="96" height="128" aria-hidden="true"></canvas><span data-i18n="filterLighten">تفتيح</span>
           </button>
           <button type="button" class="filter-button" data-filter="shadows" aria-pressed="false">
-            <canvas width="96" height="128" aria-hidden="true"></canvas><span data-i18n="filterShadows">Remove Shadows</span>
+            <canvas width="96" height="128" aria-hidden="true"></canvas><span data-i18n="filterShadows">إزالة الظلال</span>
           </button>
         </div>
         <div class="adjustment-panel">
@@ -224,7 +252,9 @@
             <span data-i18n="rotate90">تدوير 90°</span>
           </button>
           <button id="resetAdjustmentsButton" type="button" class="button ghost" data-i18n="reset">إعادة ضبط</button>
-          <button id="acceptPageButton" type="button" class="button primary" data-i18n="keepPage">اعتماد الصفحة</button>
+          <button id="restoreOriginalButton" type="button" class="button ghost" data-i18n="restoreOriginal">استعادة الأصل</button>
+          <button id="cancelEditButton" type="button" class="button ghost" data-i18n="cancel">إلغاء</button>
+          <button id="acceptPageButton" type="button" class="button primary" data-i18n="applyEdits">تطبيق التعديلات</button>
         </div>
       </section>
 
@@ -458,6 +488,7 @@
         <img class="page-thumbnail" alt="" loading="lazy" decoding="async">
       </button>
       <div class="page-card-actions">
+        <button type="button" class="button ghost page-retake" data-i18n="retake">إعادة التصوير</button>
         <button type="button" class="button ghost page-move-before" data-i18n="moveBefore">تقديم</button>
         <button type="button" class="button ghost page-move-after" data-i18n="moveAfter">تأخير</button>
         <button type="button" class="button ghost danger-text page-delete" data-i18n="delete">حذف</button>

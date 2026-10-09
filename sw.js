@@ -1,10 +1,11 @@
 /* Increment VERSION whenever app shell files change. Documents live in IndexedDB. */
-const VERSION = 'v1';
+const VERSION = 'v2.1-scanner';
 const SHELL_CACHE = 'gomaa-scan-shell-' + VERSION;
 const LIBRARY_CACHE = 'gomaa-scan-libraries-' + VERSION;
 const BASE = self.registration.scope;
 const SHELL = [
   './', './index.html', './style.css', './app.js', './manifest.json',
+  './scan-core.js', './scan-engine.js', './scan-worker.js',
   './icons/logo.svg', './icons/icon-192.png', './icons/icon-512.png', './icons/apple-touch-icon.png'
 ].map(path => new URL(path, BASE).href);
 const RESOURCES = [
@@ -55,7 +56,9 @@ self.addEventListener('fetch', event => {
     event.respondWith((async () => {
       const cache = await caches.open(LIBRARY_CACHE), cached = await cache.match(request.url);
       if (cached) return cached;
-      const response = await fetch(request);
+      // importScripts may request a CDN script in no-cors mode. Fetch explicitly
+      // with CORS so the complete OpenCV response can be cached for offline scans.
+      const response = await fetch(request.url,{mode:'cors',credentials:'omit'});
       if (response.ok && response.type !== 'opaque') { try { await cache.put(request.url,response.clone()); } catch {} }
       return response;
     })());

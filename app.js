@@ -3,6 +3,7 @@
   'use strict';
   const $ = id => document.getElementById(id);
   const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
+  const scanner = window.GomaaScanEngine.create();
   const CDN = {
     cv: 'https://cdn.jsdelivr.net/npm/@techstark/opencv-js@4.12.0-release.1/dist/opencv.js',
     pdf: 'https://cdn.jsdelivr.net/npm/jspdf@4.2.1/dist/jspdf.umd.min.js',
@@ -11,14 +12,18 @@
     core: 'https://cdn.jsdelivr.net/npm/tesseract.js-core@6.0.0',
     lang: 'https://tessdata.projectnaptha.com/4.0.0'
   };
+  const orientation = window.GomaaScanOrientation.create({ loadOCR: ensureOCR, workerPath: CDN.worker, corePath: CDN.core, langPath: CDN.lang });
   const state = {
     lang: 'ar', theme: 'system', view: 'library', records: [], selected: new Set(),
     selecting: false, doc: null, dirty: false, pageIndex: 0, queue: [],
-    source: null, warped: null, corners: [], filter: 'original', rotation: 0,
+    source: null, originalSource: null, warped: null, previewSource: null, corners: [], filter: 'auto', rotation: 0,
+    editSnapshot: null, resultMessage: 'autoReady', autoRotation: 0,
+    retakeId: null, scannerPromise: null, processorAvailable: false, processorFailed: false,
+    previewPromise: null, pendingPreview: null, previewRevision: 0,
     stream: null, cameraToken: 0, detectionTimer: 0, lastCorners: null, stableAnchor: null,
     stableSince: 0, capturing: false, torch: false, busy: false,
     ocrWorker: null, ocrRun: 0, installEvent: null, objectUrls: new Set(),
-    db: null, cv: null, cvPromise: null, sw: null, offlineRunning: false
+    db: null, sw: null, offlineRunning: false
   };
   const EN = {
     skipToContent:'Skip to content',offline:'Offline',toggleTheme:'Switch appearance',
@@ -33,9 +38,10 @@
     gallery:'Gallery',capture:'Capture photo',retryCamera:'Try camera again',cameraHint:'Place the paper on a contrasting background with good lighting.',
     adjustEdges:'Adjust edges',cropHint:'Drag the four corners. You can also focus a corner and move it with the arrow keys.',
     originalImage:'Original image',cornerTopLeft:'Top left corner',cornerTopRight:'Top right corner',
-    cornerBottomRight:'Bottom right corner',cornerBottomLeft:'Bottom left corner',useFullImage:'Use full image',
-    confirmCrop:'Crop and correct perspective',enhanceImage:'Enhance image',editedPreview:'Edited image preview',
-    imageFilters:'Image filters',filterOriginal:'Original',filterMagic:'Magic Color',filterBW:'Black & White',
+    cornerBottomRight:'Bottom right corner',cornerBottomLeft:'Bottom left corner',
+    scanResult:'Document ready',documentPreview:'Document preview',addOnePage:'Add page',optionalEdit:'Edit',filterAuto:'Auto',restoreOriginal:'Restore original',applyEdits:'Apply edits',
+    confirmCrop:'Done',useFullImage:'Fill image',retake:'Retake',rotateCrop:'Rotate',filterDocument:'Document',enhanceImage:'Enhance image',editedPreview:'Edited image preview',
+    imageFilters:'Image filters',filterOriginal:'Original',filterMagic:'Enhanced Color',filterBW:'Black & White',
     filterGray:'Grayscale',filterLighten:'Lighten',filterShadows:'Remove Shadows',brightness:'Brightness',
     contrast:'Contrast',rotate90:'Rotate 90°',reset:'Reset',keepPage:'Keep page',backLibrary:'Library',
     addPages:'Add pages',saveDocument:'Save document',saveChanges:'Save changes',download:'Download',rename:'Rename',
@@ -95,8 +101,14 @@
     offlinePartial:['الملفات المحفوظة: {n} من {total}','Cached files: {n} of {total}'],
     offlineNeedOnline:['اتصل بالإنترنت لإكمال تنزيل ملفات الأوفلاين.','Connect to the internet to finish downloading offline files.'],
     swUnavailable:['العمل أوفلاين يحتاج متصفحًا يدعم Service Worker وHTTPS.','Offline use requires Service Worker support and HTTPS.'],
-    batch:['الصور المتبقية: {n}','Remaining images: {n}'],memory:['تعذر معالجة الصورة. جرّب صورة أصغر أو أغلق التطبيقات الأخرى.','Image processing failed. Try a smaller image or close other apps.']
+    batch:['الصور المتبقية: {n}','Remaining images: {n}'],memory:['تعذر معالجة الصورة. جرّب صورة أصغر أو أغلق التطبيقات الأخرى.','Image processing failed. Try a smaller image or close other apps.'],
+    scannerFallback:['تعذر تشغيل معالجة المستند. يمكنك اعتماد الصورة الأصلية وحفظها، أو إعادة المحاولة عند الاتصال بالإنترنت.','Document processing is unavailable. You can keep and save the original photo, or retry when online.'],
+    previewReady:['معاينة سريعة — تُطبّق المعالجة بالدقة الكاملة عند اعتماد الصفحة.','Quick preview — full resolution is processed when you keep the page.']
   };
+  messages.autoReady=['تم قص المستند وتصحيح المنظور وتحسين الإضاءة مع الحفاظ على الألوان.','Document cropped, perspective corrected and lighting enhanced with colors preserved.'];
+  messages.autoUncertain=['حدود الورقة غير مؤكدة؛ نعرض الصورة الأصلية كاملة. يمكنك حفظها أو الضغط على تعديل.','Paper edges are uncertain; showing the complete original. Save it or tap Edit.'];
+  messages.editsReady=['التعديلات جاهزة. يمكنك الحفظ أو إضافة صفحة.','Edits ready. Save or add another page.'];
+  messages.rotationApplied=['تم ضبط اتجاه الصفحة تلقائيًا.','Page orientation corrected automatically.'];
   function t(key, vars = {}) {
     let text = messages[key]?.[state.lang === 'ar' ? 0 : 1] ?? (state.lang === 'ar' ? AR[key] : EN[key]) ?? AR[key] ?? key;
     for (const [name,value] of Object.entries(vars)) text = text.replaceAll(`{${name}}`, String(value));
@@ -154,8 +166,8 @@
     });
   }
   async function leaveCurrent() {
-    if ((state.dirty || state.queue.length || ['crop','edit'].includes(state.view)) && !await confirm(t('discard'),t('discardTitle'),t('discardAction'))) return false;
-    state.doc=null; state.dirty=false; state.queue=[]; state.source=null; state.warped=null; return true;
+    if ((state.dirty || state.queue.length || ['crop','edit','review'].includes(state.view)) && !await confirm(t('discard'),t('discardTitle'),t('discardAction'))) return false;
+    state.doc=null; state.dirty=false; state.queue=[]; clearCurrentImage(); state.retakeId=null; return true;
   }
   const uid = () => crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36)+Math.random().toString(36).slice(2);
   function defaultName() { const d=new Date(),pad=n=>String(n).padStart(2,'0'); return `GomaaScan_${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}_${pad(d.getHours())}-${pad(d.getMinutes())}`; }
@@ -210,7 +222,7 @@
   function toggleSelection(id) {if(state.selected.has(id))state.selected.delete(id);else state.selected.add(id);renderLibrary();}
   function canvas(width,height) {const el=document.createElement('canvas');el.width=width;el.height=height;return el;}
   function canvasBlob(el,quality=.92) {return new Promise((resolve,reject)=>el.toBlob(blob=>blob?resolve(blob):reject(userError('memory')),'image/jpeg',quality));}
-  async function decodeImage(blob,max=2400) {
+  async function decodeImage(blob,max=4096) {
     const url=URL.createObjectURL(blob);
     try {const img=new Image();img.src=url;await img.decode();const scale=Math.min(1,max/Math.max(img.naturalWidth,img.naturalHeight));const el=canvas(Math.max(1,Math.round(img.naturalWidth*scale)),Math.max(1,Math.round(img.naturalHeight*scale)));const ctx=el.getContext('2d');ctx.fillStyle='white';ctx.fillRect(0,0,el.width,el.height);ctx.drawImage(img,0,0,el.width,el.height);return el;}
     catch {throw userError('invalidImage');}finally{URL.revokeObjectURL(url);}
@@ -220,46 +232,26 @@
     if(scripts.has(url))return scripts.get(url);
     const promise=new Promise((resolve,reject)=>{const el=document.createElement('script');el.src=url;el.crossOrigin='anonymous';const timer=setTimeout(()=>{el.remove();scripts.delete(url);reject(userError('loadFailed'));},90000);el.onload=()=>{clearTimeout(timer);resolve();};el.onerror=()=>{clearTimeout(timer);el.remove();scripts.delete(url);reject(userError('loadFailed'));};document.head.append(el);});scripts.set(url,promise);return promise;
   }
-  function ensureCV() {
-    if(state.cv)return Promise.resolve(state.cv);if(state.cvPromise)return state.cvPromise;
-    state.cvPromise=(async()=>{
-      await loadScript(CDN.cv);let cv=window.cv;
-      if(Object.prototype.toString.call(cv)==='[object Promise]')cv=await cv;
-      if(!cv?.Mat)await new Promise((resolve,reject)=>{
-        const started=Date.now();const timer=setInterval(()=>{
-          if(cv?.Mat){clearInterval(timer);resolve();}
-          else if(Date.now()-started>90000){clearInterval(timer);reject(userError('loadFailed'));}
-        },50);
-      });
-      // This pinned Emscripten build has a self-returning .then method, not a Promise.
-      // Remove it after initialization so async return does not recurse indefinitely.
-      if(typeof cv.then==='function')delete cv.then;
-      if(!cv?.Mat)throw userError('loadFailed');state.cv=cv;return cv;
-    })().catch(error=>{state.cvPromise=null;scripts.delete(CDN.cv);throw error;});return state.cvPromise;
+  function ensureScanner() {
+    if(state.scannerPromise)return state.scannerPromise;
+    state.scannerPromise=scanner.ready().then(result=>{
+      state.processorAvailable=true;state.processorFailed=false;return result;
+    }).catch(error=>{
+      state.processorAvailable=false;state.processorFailed=true;throw error;
+    }).finally(()=>{state.scannerPromise=null;});
+    return state.scannerPromise;
   }
   async function ensurePDF(){if(!window.jspdf)await loadScript(CDN.pdf);return window.jspdf.jsPDF;}
   async function ensureOCR(){if(!window.Tesseract)await loadScript(CDN.ocr);return window.Tesseract;}
   function orderPoints(points) {
-    const cx=points.reduce((n,p)=>n+p.x,0)/4,cy=points.reduce((n,p)=>n+p.y,0)/4;
-    const sorted=[...points].sort((a,b)=>Math.atan2(a.y-cy,a.x-cx)-Math.atan2(b.y-cy,b.x-cx));
-    const start=sorted.reduce((best,p,i)=>p.x+p.y<sorted[best].x+sorted[best].y?i:best,0);return [...sorted.slice(start),...sorted.slice(0,start)];
+    return window.GomaaScanCore.orderPoints(points);
   }
-  function detectCorners(input) {
-    const cv=state.cv;if(!cv)return null;const mats=[];const keep=m=>{mats.push(m);return m;};
-    try {
-      const src=keep(cv.imread(input)),gray=keep(new cv.Mat()),blur=keep(new cv.Mat()),edges=keep(new cv.Mat()),hierarchy=keep(new cv.Mat()),contours=keep(new cv.MatVector());
-      cv.cvtColor(src,gray,cv.COLOR_RGBA2GRAY);cv.GaussianBlur(gray,blur,new cv.Size(5,5),0);cv.Canny(blur,edges,45,135);
-      const kernel=keep(cv.Mat.ones(3,3,cv.CV_8U));cv.morphologyEx(edges,edges,cv.MORPH_CLOSE,kernel);
-      cv.findContours(edges,contours,hierarchy,cv.RETR_EXTERNAL,cv.CHAIN_APPROX_SIMPLE);
-      let best=null,bestArea=0;const total=input.width*input.height;
-      for(let i=0;i<contours.size();i++){
-        const contour=contours.get(i),approx=new cv.Mat();
-        try {const area=Math.abs(cv.contourArea(contour));if(area<total*.16||area>total*.995||area<bestArea)continue;
-          cv.approxPolyDP(contour,approx,cv.arcLength(contour,true)*.025,true);
-          if(approx.rows===4&&cv.isContourConvex(approx)){const pts=[];for(let j=0;j<4;j++)pts.push({x:approx.data32S[j*2]/input.width,y:approx.data32S[j*2+1]/input.height});best=orderPoints(pts);bestArea=area;}
-        }finally{contour.delete();approx.delete();}
-      }return best;
-    }finally{mats.reverse().forEach(m=>m.delete());}
+  function normalizedPoints(points,source) {
+    return points.map(p=>({x:p.x/(source.width-1),y:p.y/(source.height-1)}));
+  }
+  async function detectCorners(input) {
+    const result=await scanner.detect(input);
+    return result.safeToCrop?normalizedPoints(result.points,input):null;
   }
   function stopCamera() {
     state.cameraToken++;clearTimeout(state.detectionTimer);state.stream?.getTracks().forEach(track=>track.stop());
@@ -267,27 +259,30 @@
   }
   async function startCamera() {
     stopCamera();const token=state.cameraToken;$('cameraError').hidden=true;$('retryCameraButton').hidden=true;$('cameraStatus').textContent=t('cameraStarting');
+    state.processorFailed=false;const scannerReady=ensureScanner();scannerReady.catch(()=>{});
+    orientation.prepare();
     try {
       if(!window.isSecureContext)throw userError('cameraSecure');if(!navigator.mediaDevices?.getUserMedia)throw userError('cameraMissing');
-      const stream=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:{ideal:'environment'},width:{ideal:1920},height:{ideal:1080}}});
+      const stream=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:{ideal:'environment'},width:{ideal:3840},height:{ideal:2160}}});
       if(token!==state.cameraToken||state.view!=='scan'){stream.getTracks().forEach(track=>track.stop());return;}
       state.stream=stream;const video=$('cameraVideo');video.srcObject=stream;await video.play();
       if(token!==state.cameraToken)return;$('captureButton').disabled=false;
       const track=stream.getVideoTracks()[0];$('torchButton').hidden=!track.getCapabilities?.().torch;$('torchButton').setAttribute('aria-pressed','false');
-      $('cameraStatus').textContent=t('loadCV');ensureCV().then(()=>{if(token===state.cameraToken)analyzeFrame(token);}).catch(()=>{if(token===state.cameraToken)$('cameraStatus').textContent=t('manual');});
+      $('cameraStatus').textContent=t('loadCV');scannerReady.then(()=>{if(token===state.cameraToken)analyzeFrame(token);}).catch(()=>{if(token===state.cameraToken)$('cameraStatus').textContent=t('scannerFallback');});
     }catch(error){
       if(token!==state.cameraToken)return;stopCamera();$('cameraError').textContent=error.userMessage||(error.name==='NotAllowedError'?t('cameraDenied'):t('cameraMissing'));
       $('cameraError').hidden=false;$('retryCameraButton').hidden=false;$('cameraStatus').textContent=t('cameraMissing');
     }
   }
-  function analyzeFrame(token) {
+  async function analyzeFrame(token) {
     if(token!==state.cameraToken||state.view!=='scan'||!state.stream)return;
-    const video=$('cameraVideo'),sample=$('detectionCanvas');
+    const video=$('cameraVideo'),sample=$('detectionCanvas'),started=performance.now();
     try {
       if(video.readyState>=2){
-        const scale=420/Math.max(video.videoWidth,video.videoHeight);sample.width=Math.round(video.videoWidth*scale);sample.height=Math.round(video.videoHeight*scale);
+        const scale=Math.min(1,480/video.videoHeight,720/video.videoWidth);sample.width=Math.round(video.videoWidth*scale);sample.height=Math.round(video.videoHeight*scale);
         sample.getContext('2d',{willReadFrequently:true}).drawImage(video,0,0,sample.width,sample.height);
-        const corners=detectCorners(sample);drawCameraCorners(corners);
+        const corners=await detectCorners(sample);
+        if(token!==state.cameraToken||state.view!=='scan')return;drawCameraCorners(corners);
         if(corners){
           const stable=state.stableAnchor&&corners.every((p,i)=>Math.hypot(p.x-state.stableAnchor[i].x,p.y-state.stableAnchor[i].y)<.022);
           if(!stable){state.stableSince=performance.now();state.stableAnchor=corners.map(p=>({...p}));}state.lastCorners=corners;$('cameraStatus').textContent=t('ready');
@@ -295,7 +290,7 @@
         }else{state.lastCorners=null;state.stableAnchor=null;state.stableSince=0;$('cameraStatus').textContent=t('findEdges');}
       }
     }catch{state.lastCorners=null;state.stableAnchor=null;state.stableSince=0;$('cameraStatus').textContent=t('manual');}
-    state.detectionTimer=setTimeout(()=>analyzeFrame(token),280);
+    if(token===state.cameraToken)state.detectionTimer=setTimeout(()=>analyzeFrame(token),Math.max(0,166-(performance.now()-started)));
   }
   function drawCameraCorners(corners) {
     const overlay=$('cameraOverlay'),rect=$('cameraStage').getBoundingClientRect(),video=$('cameraVideo');
@@ -305,21 +300,31 @@
   }
   async function captureImage() {
     if(state.capturing||state.busy||!state.stream)return;state.capturing=true;
-    try {const video=$('cameraVideo');if(!video.videoWidth)return;const scale=Math.min(1,2400/Math.max(video.videoWidth,video.videoHeight));const image=canvas(Math.round(video.videoWidth*scale),Math.round(video.videoHeight*scale));image.getContext('2d').drawImage(video,0,0,image.width,image.height);const detected=state.lastCorners?.map(p=>({...p}));stopCamera();await busy(()=>beginImage(image,detected),t('loadCV'));}
+    try {const video=$('cameraVideo');if(!video.videoWidth)return;const scale=Math.min(1,4096/Math.max(video.videoWidth,video.videoHeight));const image=canvas(Math.round(video.videoWidth*scale),Math.round(video.videoHeight*scale));image.getContext('2d').drawImage(video,0,0,image.width,image.height);stopCamera();await busy(()=>beginImage(image),t('processing'));}
     finally{state.capturing=false;}
   }
-  async function beginImage(source,detected) {
-    state.source=source;state.warped=null;
-    try {await ensureCV();if(!detected){const scale=Math.min(1,800/Math.max(source.width,source.height)),sample=canvas(Math.round(source.width*scale),Math.round(source.height*scale));sample.getContext('2d').drawImage(source,0,0,sample.width,sample.height);detected=detectCorners(sample);}}
-    catch(error){toast(errorMessage(error),true);}
-    state.corners=detected||[{x:0,y:0},{x:1,y:0},{x:1,y:1},{x:0,y:1}];
-    const target=$('cropCanvas');target.width=source.width;target.height=source.height;target.getContext('2d').drawImage(source,0,0);
-    $('cropMessage').textContent=t(detected?'found':'manual')+(state.queue.length?' · '+t('batch',{n:state.queue.length}):'');
-    view('crop');updateCorners();
+  async function beginImage(source) {
+    clearCurrentImage();state.source=source;state.originalSource=source;let detected=null;
+    orientation.prepare();
+    try {if(!state.processorFailed){await ensureScanner();detected=await detectCorners(source);}}
+    catch(error){scannerFailure(error);}
+    state.corners=detected||fullCorners();state.rotation=0;state.autoRotation=0;
+    $('brightnessRange').value=$('contrastRange').value=0;
+    state.filter=detected&&state.processorAvailable?'auto':'original';
+    state.resultMessage=state.processorFailed?'scannerFallback':detected?'autoReady':'autoUncertain';
+    await rebuildWarp();
+    if(detected&&state.processorAvailable){
+      const result=await orientation.angle(scaledCanvas(state.warped,1600));
+      state.rotation=result.rotation;state.autoRotation=result.rotation;
+    }
+    try {await showReview();}catch(error){
+      scannerFailure(error);state.corners=fullCorners();state.warped=source;state.previewSource=scaledCanvas(source,960);
+      state.filter='original';state.rotation=0;state.resultMessage='scannerFallback';await showReview();
+    }
   }
   async function importImages() {
     const files=[...$('imageInput').files];$('imageInput').value='';if(!files.length)return;
-    if(['crop','edit'].includes(state.view)&&!await confirm(t('discard'),t('discardTitle'),t('discardAction')))return;
+    if(['crop','edit','review'].includes(state.view)&&!await confirm(t('discard'),t('discardTitle'),t('discardAction')))return;
     state.doc??={id:null,name:t('draft'),pages:[],format:'pdf',quality:'medium'};state.queue=files.slice(1);stopCamera();
     await busy(async()=>beginImage(await decodeImage(files[0])));
   }
@@ -352,58 +357,141 @@
   async function cropImage() {
     if(!validCorners(state.corners))throw userError('invalidCorners');
     await busy(async()=>{
-      const cv=await ensureCV(),source=state.source,pts=state.corners.map(p=>({x:p.x*(source.width-1),y:p.y*(source.height-1)}));
-      const distance=(a,b)=>Math.hypot(a.x-b.x,a.y-b.y);let w=Math.max(distance(pts[0],pts[1]),distance(pts[3],pts[2])),h=Math.max(distance(pts[0],pts[3]),distance(pts[1],pts[2]));
-      const scale=Math.min(1,2400/Math.max(w,h));w=Math.max(2,Math.round(w*scale));h=Math.max(2,Math.round(h*scale));
-      let src,dst,from,to,transform;
-      try {src=cv.imread(source);dst=new cv.Mat();from=cv.matFromArray(4,1,cv.CV_32FC2,pts.flatMap(p=>[p.x,p.y]));to=cv.matFromArray(4,1,cv.CV_32FC2,[0,0,w-1,0,w-1,h-1,0,h-1]);transform=cv.getPerspectiveTransform(from,to);cv.warpPerspective(src,dst,transform,new cv.Size(w,h),cv.INTER_LINEAR,cv.BORDER_REPLICATE);state.warped=canvas(w,h);cv.imshow(state.warped,dst);}
-      finally{[transform,to,from,dst,src].forEach(m=>m?.delete());}
-      state.filter='original';state.rotation=0;$('brightnessRange').value=$('contrastRange').value=0;view('edit');await renderFilterThumbnails();renderEdited();
+      await rebuildWarp();
+      $$('[data-filter]').forEach(button=>button.disabled=!state.processorAvailable&&button.dataset.filter!=='original');
+      view('edit');await renderEdited();await renderFilterThumbnails();
     });
   }
-  function filteredCanvas(source,filter) {
-    const cv=state.cv,output=canvas(source.width,source.height);if(filter==='original'){output.getContext('2d').drawImage(source,0,0);return output;}
-    const mats=[],keep=m=>{mats.push(m);return m;};
-    try {
-      const src=keep(cv.imread(source)),gray=keep(new cv.Mat()),result=keep(new cv.Mat());
-      if(filter==='gray'||filter==='bw'){
-        cv.cvtColor(src,gray,cv.COLOR_RGBA2GRAY);
-        if(filter==='bw'){cv.GaussianBlur(gray,gray,new cv.Size(3,3),0);cv.adaptiveThreshold(gray,result,255,cv.ADAPTIVE_THRESH_GAUSSIAN_C,cv.THRESH_BINARY,31,11);}else gray.copyTo(result);
-      }else if(filter==='lighten'){src.convertTo(result,-1,1.08,22);}
-      else if(filter==='magic'){
-        src.convertTo(result,-1,1.18,-15);
-        const data=result.data;for(let i=0;i<data.length;i+=4){const mean=(data[i]+data[i+1]+data[i+2])/3;for(let c=0;c<3;c++)data[i+c]=Math.max(0,Math.min(255,mean+(data[i+c]-mean)*1.15));}
-      }else if(filter==='shadows'){
-        cv.cvtColor(src,gray,cv.COLOR_RGBA2GRAY);const background=keep(new cv.Mat()),kernel=keep(cv.getStructuringElement(cv.MORPH_RECT,new cv.Size(21,21)));
-        cv.dilate(gray,background,kernel);cv.GaussianBlur(background,background,new cv.Size(0,0),13);
-        src.copyTo(result);const data=result.data,base=background.data;
-        for(let p=0;p<base.length;p++){const factor=245/Math.max(30,base[p]);for(let c=0;c<3;c++)data[p*4+c]=Math.min(255,Math.round(data[p*4+c]*factor));}
-      }else src.copyTo(result);
-      cv.imshow(output,result);return output;
-    }finally{mats.reverse().forEach(m=>m.delete());}
+  function fullCorners(){return [{x:0,y:0},{x:1,y:0},{x:1,y:1},{x:0,y:1}];}
+  function clearCurrentImage(){
+    state.source=null;state.originalSource=null;state.warped=null;state.previewSource=null;state.editSnapshot=null;
+    state.pendingPreview=null;state.previewRevision++;
+    // Canvas backing stores otherwise retain full-resolution photos after saving.
+    for(const id of ['cropCanvas','editCanvas','autoPreviewCanvas']){$(id).width=1;$(id).height=1;}
+  }
+  function scannerFailure(error){
+    console.warn('Scanner fallback:',error);state.processorAvailable=false;state.processorFailed=true;
+    state.resultMessage='scannerFallback';state.filter='original';toast(t('scannerFallback'),true);
+  }
+  async function rebuildWarp(){
+    const full=state.corners.every((p,i)=>Math.abs(p.x-fullCorners()[i].x)<1e-8&&Math.abs(p.y-fullCorners()[i].y)<1e-8);
+    if(state.processorAvailable&&!full){
+      try {state.warped=canvasFromPixels(await scanner.warp(state.source,state.corners.map(p=>({x:p.x*(state.source.width-1),y:p.y*(state.source.height-1)}))));}
+      catch(error){scannerFailure(error);state.warped=state.source;state.rotation=0;state.corners=fullCorners();}
+    }else state.warped=state.source;
+    state.previewSource=scaledCanvas(state.warped,960);
+  }
+  async function showReview(){
+    const output=await processedCanvas(state.previewSource,editorOptions()),target=$('autoPreviewCanvas');
+    target.width=output.width;target.height=output.height;target.getContext('2d').drawImage(output,0,0);
+    $('autoResultStatus').textContent=t(state.resultMessage)+(state.autoRotation?' '+t('rotationApplied'):'')+(state.queue.length?' · '+t('batch',{n:state.queue.length}):'');
+    $('reviewAddPageButton').textContent=state.queue.length?t('keepPage'):t('addOnePage');view('review');
+  }
+  function showCrop(){
+    const target=$('cropCanvas');target.width=state.source.width;target.height=state.source.height;target.getContext('2d').drawImage(state.source,0,0);
+    $('cropMessage').textContent=t(state.processorAvailable?'cropHint':'scannerFallback');view('crop');updateCorners();
+  }
+  async function startEditing(){
+    state.editSnapshot={source:state.source,warped:state.warped,previewSource:state.previewSource,corners:state.corners.map(p=>({...p})),options:editorOptions(),message:state.resultMessage,autoRotation:state.autoRotation};
+    $$('[data-filter]').forEach(button=>button.disabled=!state.processorAvailable&&button.dataset.filter!=='original');
+    view('edit');await renderEdited();await renderFilterThumbnails();
+  }
+  async function applyEditing(){
+    await busy(async()=>{await state.previewPromise;state.resultMessage='editsReady';state.autoRotation=0;await showReview();state.editSnapshot=null;});
+  }
+  async function cancelOptionalEditing(){
+    await busy(async()=>{
+      await state.previewPromise;const snapshot=state.editSnapshot;if(!snapshot)return;
+      Object.assign(state,{source:snapshot.source,warped:snapshot.warped,previewSource:snapshot.previewSource,corners:snapshot.corners,filter:snapshot.options.filter,rotation:snapshot.options.rotation,resultMessage:snapshot.message,autoRotation:snapshot.autoRotation});
+      $('brightnessRange').value=snapshot.options.brightness;$('contrastRange').value=snapshot.options.contrast;
+      await showReview();state.editSnapshot=null;
+    });
+  }
+  async function restoreOriginal(){
+    await busy(async()=>{
+      await state.previewPromise;state.source=state.originalSource;state.corners=fullCorners();state.filter='original';state.rotation=0;state.autoRotation=0;
+      $('brightnessRange').value=$('contrastRange').value=0;await rebuildWarp();await renderEdited();await renderFilterThumbnails();
+    });
+  }
+  function canvasFromPixels(result) {
+    const output=canvas(result.width,result.height);
+    output.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(result.data),result.width,result.height),0,0);
+    return output;
+  }
+  function scaledCanvas(source,max) {
+    const scale=Math.min(1,max/Math.max(source.width,source.height)),output=canvas(Math.max(2,Math.round(source.width*scale)),Math.max(2,Math.round(source.height*scale)));
+    output.getContext('2d').drawImage(source,0,0,output.width,output.height);return output;
+  }
+  function editorOptions() {
+    return {filter:state.filter,brightness:Number($('brightnessRange').value),contrast:Number($('contrastRange').value),rotation:state.rotation};
+  }
+  async function processedCanvas(source,options) {
+    let filtered;
+    if(state.processorAvailable&&options.filter!=='original')filtered=canvasFromPixels(await scanner.enhance(source,options));
+    else {
+      filtered=rotateCanvas(source,0);
+      if(options.brightness||options.contrast){
+        const ctx=filtered.getContext('2d'),image=ctx.getImageData(0,0,filtered.width,filtered.height),gain=(100+options.contrast)/100;
+        for(let i=0;i<image.data.length;i+=4)for(let c=0;c<3;c++)image.data[i+c]=(image.data[i+c]-128)*gain+128+options.brightness*2;
+        ctx.putImageData(image,0,0);
+      }
+    }
+    return rotateCanvas(filtered,options.rotation||0);
   }
   function rotateCanvas(source,rotation) {
     const sideways=rotation%180!==0,out=canvas(sideways?source.height:source.width,sideways?source.width:source.height),ctx=out.getContext('2d');
     ctx.translate(out.width/2,out.height/2);ctx.rotate(rotation*Math.PI/180);ctx.drawImage(source,-source.width/2,-source.height/2);return out;
   }
   function renderEdited() {
-    if(!state.warped)return;const brightness=Number($('brightnessRange').value),contrast=Number($('contrastRange').value);
-    $('brightnessValue').value=brightness;$('contrastValue').value=contrast;
-    const filtered=filteredCanvas(state.warped,state.filter),ctx=filtered.getContext('2d',{willReadFrequently:true}),data=ctx.getImageData(0,0,filtered.width,filtered.height),gain=(100+contrast)/100;
-    if(brightness||contrast){for(let i=0;i<data.data.length;i+=4)for(let c=0;c<3;c++)data.data[i+c]=(data.data[i+c]-128)*gain+128+brightness*2;ctx.putImageData(data,0,0);}
-    const rotated=rotateCanvas(filtered,state.rotation),target=$('editCanvas');target.width=rotated.width;target.height=rotated.height;target.getContext('2d').drawImage(rotated,0,0);
+    if(!state.previewSource)return Promise.resolve();const options=editorOptions();
+    $('brightnessValue').value=options.brightness;$('contrastValue').value=options.contrast;
     $$('[data-filter]').forEach(button=>{const active=button.dataset.filter===state.filter;button.classList.toggle('active',active);button.setAttribute('aria-pressed',String(active));});
+    state.pendingPreview={options,revision:++state.previewRevision,source:state.previewSource};
+    if(state.previewPromise)return state.previewPromise;
+    $('filterPreviewStatus').textContent=t('processing');$('editCanvas').setAttribute('aria-busy','true');$('acceptPageButton').disabled=true;
+    state.previewPromise=(async()=>{
+      try {
+        // Coalesce fast slider/filter changes; obsolete responses never overwrite the latest preview.
+        while(state.pendingPreview){
+          const pending=state.pendingPreview;state.pendingPreview=null;
+          const output=await processedCanvas(pending.source,pending.options);
+          if(pending.revision!==state.previewRevision||state.view!=='edit')continue;
+          const target=$('editCanvas');target.width=output.width;target.height=output.height;target.getContext('2d').drawImage(output,0,0);
+        }
+        $('filterPreviewStatus').textContent=t(state.processorAvailable?'previewReady':'scannerFallback');
+      } finally {state.previewPromise=null;$('editCanvas').setAttribute('aria-busy','false');$('acceptPageButton').disabled=false;}
+    })();return state.previewPromise;
   }
   async function renderFilterThumbnails() {
-    const source=state.warped,scale=Math.min(1,160/Math.max(source.width,source.height)),small=canvas(Math.round(source.width*scale),Math.round(source.height*scale));small.getContext('2d').drawImage(source,0,0,small.width,small.height);
-    for(const button of $$('[data-filter]')){const filtered=filteredCanvas(small,button.dataset.filter),target=button.querySelector('canvas'),ctx=target.getContext('2d'),ratio=Math.min(target.width/filtered.width,target.height/filtered.height);ctx.clearRect(0,0,target.width,target.height);ctx.drawImage(filtered,(target.width-filtered.width*ratio)/2,(target.height-filtered.height*ratio)/2,filtered.width*ratio,filtered.height*ratio);await nextPaint();}
+    const small=scaledCanvas(state.warped,160);
+    for(const button of $$('[data-filter]')){
+      const filtered=await processedCanvas(small,{filter:button.dataset.filter,brightness:0,contrast:0,rotation:0}),target=button.querySelector('canvas'),ctx=target.getContext('2d'),ratio=Math.min(target.width/filtered.width,target.height/filtered.height);
+      ctx.clearRect(0,0,target.width,target.height);ctx.drawImage(filtered,(target.width-filtered.width*ratio)/2,(target.height-filtered.height*ratio)/2,filtered.width*ratio,filtered.height*ratio);await nextPaint();
+    }
   }
-  async function acceptPage() {
+  async function acceptPage(action='document') {
     await busy(async()=>{
-      const edited=$('editCanvas');state.doc??={id:null,name:t('draft'),pages:[],format:'pdf',quality:'medium'};
-      state.doc.pages.push({id:uid(),blob:await canvasBlob(edited,.95),width:edited.width,height:edited.height});state.dirty=true;state.pageIndex=state.doc.pages.length-1;state.doc.exportBlob=null;state.doc.exportPages=null;state.source=null;state.warped=null;
+      // Never save the downscaled preview. Render the selected settings on the full warped page.
+      await state.previewPromise;const edited=await processedCanvas(state.warped,editorOptions());state.doc??={id:null,name:t('draft'),pages:[],format:'pdf',quality:'medium'};
+      const replacement=state.retakeId?state.doc.pages.findIndex(page=>page.id===state.retakeId):-1;
+      const page={id:state.retakeId||uid(),blob:await canvasBlob(edited,.97),width:edited.width,height:edited.height};
+      if(replacement>=0){state.doc.pages[replacement]=page;state.pageIndex=replacement;}else{state.doc.pages.push(page);state.pageIndex=state.doc.pages.length-1;}
+      state.retakeId=null;state.dirty=true;state.doc.exportBlob=null;state.doc.exportPages=null;clearCurrentImage();
       if(state.queue.length){const file=state.queue.shift();await beginImage(await decodeImage(file));}else{view('document');renderDocument();}
     });
+    if(state.view==='review')return;
+    if(action==='save'){if(state.doc.id)await saveChanges();else showSaveDialog();}
+    else if(action==='add'){view('scan');await startCamera();}
+  }
+  function rotateCrop() {
+    state.source=rotateCanvas(state.source,90);state.corners=orderPoints(state.corners.map(p=>({x:1-p.y,y:p.x})));
+    const target=$('cropCanvas');target.width=state.source.width;target.height=state.source.height;target.getContext('2d').drawImage(state.source,0,0);
+    state.warped=null;state.previewSource=null;$('magnifierCanvas').hidden=true;updateCorners();
+  }
+  async function retakeImage(pageId=null) {
+    if(pageId)state.retakeId=pageId;
+    clearCurrentImage();
+    view('scan');await startCamera();
   }
   async function openDocument(id) {
     if(state.dirty&&!await leaveCurrent())return;const record=state.records.find(d=>d.id===id);if(!record)return;
@@ -420,6 +508,7 @@
       const card=$('pageCardTemplate').content.firstElementChild.cloneNode(true);translate(card);card.dataset.index=index;
       card.classList.toggle('selected-page',index===state.pageIndex);card.querySelector('.page-number').textContent=t('pageNumber',{n:index+1});card.querySelector('.page-thumbnail').src=blobUrl(page.blob);
       card.querySelector('.page-open').onclick=()=>openPreview(index);
+      card.querySelector('.page-retake').onclick=safe(()=>{state.queue=[];return retakeImage(page.id);});
       card.querySelector('.page-move-before').disabled=index===0;card.querySelector('.page-move-after').disabled=index===doc.pages.length-1;
       card.querySelector('.page-move-before').onclick=()=>movePage(index,index-1);card.querySelector('.page-move-after').onclick=()=>movePage(index,index+1);
       card.querySelector('.page-delete').onclick=safe(async()=>{if(doc.pages.length===1){toast(t('lastPage'),true);return;}if(await confirm(t('deletePage'))){doc.pages.splice(index,1);state.pageIndex=Math.min(state.pageIndex,doc.pages.length-1);markDirty();renderDocument();}});
@@ -559,7 +648,7 @@
     if(!await leaveCurrent())return;view(name);if(name==='library')renderLibrary();else{refreshStorage();checkOffline();}
   }
   async function cancelEditing(){
-    if(!await confirm(t('discard'),t('discardTitle'),t('discardAction')))return;state.queue=[];state.source=null;state.warped=null;
+    if(!await confirm(t('discard'),t('discardTitle'),t('discardAction')))return;state.queue=[];state.source=null;state.warped=null;state.previewSource=null;state.retakeId=null;
     if(state.doc?.pages.length){view('document');renderDocument();}else{state.doc=null;state.dirty=false;view('library');renderLibrary();}
   }
   function bindEvents(){
@@ -574,16 +663,17 @@
     $('cancelSelectionButton').onclick=()=>{state.selecting=false;state.selected.clear();renderLibrary();};
     $('selectAllButton').onclick=()=>{const ids=state.records.filter(doc=>doc.name.toLocaleLowerCase().includes($('searchInput').value.trim().toLocaleLowerCase())).map(doc=>doc.id);const all=ids.every(id=>state.selected.has(id));ids.forEach(id=>all?state.selected.delete(id):state.selected.add(id));renderLibrary();};
     $('deleteSelectedButton').onclick=safe(()=>deleteDocs([...state.selected]));$('shareSelectedButton').onclick=safe(()=>shareDocs(state.records.filter(doc=>state.selected.has(doc.id))));
-    $('captureButton').onclick=safe(captureImage);$('retryCameraButton').onclick=safe(startCamera);$('closeScanButton').onclick=safe(async()=>{if(state.doc?.pages.length){view('document');renderDocument();}else await navigate('library');});
+    $('captureButton').onclick=safe(captureImage);$('retryCameraButton').onclick=safe(startCamera);$('closeScanButton').onclick=safe(async()=>{state.retakeId=null;if(state.doc?.pages.length){view('document');renderDocument();}else await navigate('library');});
     $('autoCaptureToggle').onchange=()=>state.stableSince=performance.now();
     $('torchButton').onclick=safe(async()=>{const track=state.stream?.getVideoTracks()[0];if(!track)return;await track.applyConstraints({advanced:[{torch:!state.torch}]});state.torch=!state.torch;$('torchButton').setAttribute('aria-pressed',String(state.torch));});
     bindCropHandles();$('fullImageButton').onclick=()=>{state.corners=[{x:0,y:0},{x:1,y:0},{x:1,y:1},{x:0,y:1}];updateCorners();};$('confirmCropButton').onclick=safe(cropImage);$('cancelCropButton').onclick=safe(cancelEditing);
+    $('rotateCropButton').onclick=rotateCrop;$('retakeCropButton').onclick=safe(()=>retakeImage());
     $('backToCropButton').onclick=()=>{view('crop');updateCorners();};
-    $$('[data-filter]').forEach(button=>button.onclick=safe(()=>busy(()=>{state.filter=button.dataset.filter;renderEdited();})));
+    $$('[data-filter]').forEach(button=>button.onclick=safe(()=>{state.filter=button.dataset.filter;return renderEdited();}));
     let editTimer;$('brightnessRange').oninput=$('contrastRange').oninput=()=>{clearTimeout(editTimer);editTimer=setTimeout(safe(renderEdited),90);};
-    $('rotateButton').onclick=safe(()=>busy(()=>{state.rotation=(state.rotation+90)%360;renderEdited();}));
-    $('resetAdjustmentsButton').onclick=safe(()=>busy(()=>{state.rotation=0;state.filter='original';$('brightnessRange').value=$('contrastRange').value=0;renderEdited();}));$('acceptPageButton').onclick=safe(acceptPage);
-    $('closeDocumentButton').onclick=safe(()=>navigate('library'));$('addPageButton').onclick=safe(async()=>{state.queue=[];view('scan');await startCamera();});
+    $('rotateButton').onclick=safe(()=>{state.rotation=(state.rotation+90)%360;return renderEdited();});
+    $('resetAdjustmentsButton').onclick=safe(()=>{state.rotation=0;state.filter=state.processorAvailable?'document':'original';$('brightnessRange').value=$('contrastRange').value=0;return renderEdited();});$('acceptPageButton').onclick=safe(acceptPage);
+    $('closeDocumentButton').onclick=safe(()=>navigate('library'));$('addPageButton').onclick=safe(async()=>{state.queue=[];state.retakeId=null;view('scan');await startCamera();});
     $('saveDraftButton').onclick=showSaveDialog;$('saveForm').onsubmit=saveDraft;$('savePageChangesButton').onclick=safe(saveChanges);
     $$('[name="outputFormat"]').forEach(radio=>radio.onchange=()=>{$('jpgHint').hidden=document.querySelector('[name="outputFormat"]:checked').value!=='jpg';});
     $('shareDocumentButton').onclick=safe(()=>shareDocs([state.doc]));$('downloadDocumentButton').onclick=safe(()=>downloadDocs([state.doc]));
@@ -605,7 +695,7 @@
     addEventListener('appinstalled',()=>{state.installEvent=null;$('installBanner').hidden=true;$('settingsInstallButton').hidden=true;});
     const connectivity=()=>$('offlineBadge').hidden=navigator.onLine;addEventListener('online',connectivity);addEventListener('offline',connectivity);connectivity();
     document.addEventListener('visibilitychange',()=>{if(document.hidden&&state.stream){stopCamera();$('cameraStatus').textContent=t('cameraPaused');$('retryCameraButton').hidden=false;}});
-    addEventListener('pagehide',()=>{stopCamera();state.ocrWorker?.terminate();});
+    addEventListener('pagehide',()=>{stopCamera();state.ocrWorker?.terminate();scanner.dispose();state.scannerPromise=null;});
     addEventListener('beforeunload',event=>{if(state.dirty||['crop','edit'].includes(state.view)){event.preventDefault();event.returnValue='';}});
   }
   async function init(){
